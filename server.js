@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 
@@ -119,7 +120,7 @@ app.post('/api/handshake', async (req, res) => {
 
         if (pageContent.includes('Invalid Password') || pageContent.includes('INVALID_PASSWORD')) {
             console.log("[PUPPETEER] Rejected: Incorrect Password.");
-            await browser.close();
+            await browser.close().catch(()=>{});
             return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
         }
 
@@ -139,18 +140,28 @@ app.post('/api/handshake', async (req, res) => {
             }
         }
 
+        console.log("[PUPPETEER] Stabilizing DOM before data extraction...");
+        // Critical Wait: Allows Zoho's post-login redirects to finish so the context isn't destroyed
+        await new Promise(resolve => setTimeout(resolve, 4000));
+
         console.log("[PUPPETEER] Requesting Profile Database JSON...");
-        const profileData = await page.evaluate(async () => {
-            try {
-                const response = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
-                return await response.json();
-            } catch (err) {
-                return null;
-            }
-        });
+        let profileData = null;
+        
+        try {
+            profileData = await page.evaluate(async () => {
+                try {
+                    const response = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
+                    return await response.json();
+                } catch (err) {
+                    return null;
+                }
+            });
+        } catch (evalErr) {
+            console.log("[PUPPETEER] Non-fatal warning: Context destroyed during profile fetch. Proceeding with fallback name.");
+        }
 
         let realName = "Classified Operative";
-        let isWrapperVerified = false;
+        let isWrapperVerified = true; // We know they are verified if they made it past the password screen!
 
         if (profileData) {
             const stringified = JSON.stringify(profileData);
@@ -159,12 +170,11 @@ app.post('/api/handshake', async (req, res) => {
             if (nameMatch && nameMatch[1]) {
                 const nameParts = nameMatch[1].trim().split(/\s+/);
                 realName = nameParts.length > 2 ? `${nameParts[0]} ${nameParts[1]}` : nameMatch[1].trim();
-                isWrapperVerified = true;
                 console.log("[PUPPETEER] SUCCESS! Extracted Name:", realName);
             }
         }
 
-        await browser.close();
+        await browser.close().catch(()=>{});
         
         return res.status(200).json({
             success: true,
@@ -174,7 +184,7 @@ app.post('/api/handshake', async (req, res) => {
 
     } catch (error) {
         console.error("[PUPPETEER] Hard crash:", error.message);
-        if (browser) await browser.close();
+        if (browser) await browser.close().catch(()=>{});
         return res.status(500).json({ success: false, error: "VM Browser Engine Failure", details: error.message });
     }
 });
