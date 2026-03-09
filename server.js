@@ -9,8 +9,15 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.status(200).json({ status: "Active", service: "Serditone Browser Injection Gateway" });
+    res.status(200).json({ status: "Active", service: "Serditone Phantom Navigator Gateway" });
 });
+
+// Helper function to extract JSON from Chrome's DOM viewer
+const extractJsonFromDom = () => {
+    const pre = document.querySelector('pre');
+    if (pre) return pre.innerText;
+    return document.body.innerText || document.body.textContent;
+};
 
 // ==========================================
 // 1. THE HANDSHAKE (Lightweight Auth Check)
@@ -95,58 +102,45 @@ app.post('/api/handshake', async (req, res) => {
         console.log("[HANDSHAKE] WAF Bypassed. Loading Visual Dashboard to establish secure cookies...");
         await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/', { waitUntil: 'networkidle2', timeout: 45000 });
         
-        // TELEMETRY: Dump all cookies so we can see what Zoho generated
         const cookies = await page.cookies();
-        const cookieNames = cookies.map(c => c.name).join(', ');
-        console.log(`[HANDSHAKE] Active Cookies on Dashboard: ${cookieNames}`);
-
-        console.log("[HANDSHAKE] Executing Browser Injection: Extracting Profile directly from DOM Context...");
-
-        let realName = "Classified Operative";
         
-        // INJECTION PROTOCOL: We run this script INSIDE the browser to perfectly mimic a human action
-        let profileRaw = await page.evaluate(async () => {
-            let token = 'NOT_FOUND';
-            
-            // Step 1: Steal the CSRF token from the browser's internal variables
-            if (typeof window.zccsr !== 'undefined') token = window.zccsr;
-            else if (window.ZohoHCAs && window.ZohoHCAs.zccsr) token = window.ZohoHCAs.zccsr;
-            else {
-                const match = document.cookie.match(/(?:^|;)\s*zccsr=([^;]+)/);
-                if (match) token = match[1];
-            }
+        let zccsr = cookies.find(c => c.name === 'zccsr')?.value || '';
+        if (!zccsr) {
+            zccsr = await page.evaluate(() => {
+                return typeof window !== 'undefined' && window.zccsr ? window.zccsr : '';
+            }).catch(() => '');
+        }
 
-            // Step 2: Fallback to iamcsr if zccsr is missing
-            if (token === 'NOT_FOUND' || !token) {
-                const backupMatch = document.cookie.match(/(?:^|;)\s*iamcsr=([^;]+)/);
-                if (backupMatch) token = backupMatch[1];
-            }
+        const iamcsr = cookies.find(c => c.name === 'iamcsr')?.value || '';
+        const activeCsrfToken = zccsr || iamcsr;
+        
+        console.log(`[HANDSHAKE] Tokens Found -> zccsr: ${zccsr ? "YES" : "NO"}, iamcsr: ${iamcsr ? "YES" : "NO"}`);
+        console.log(`[HANDSHAKE] THE PHANTOM NAVIGATOR: Forging HTTP Headers at the Engine level...`);
 
-            // Step 3: Execute the Fetch NATIVELY. The browser attaches all security headers automatically.
-            try {
-                const res = await window.fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report', {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json',
-                        'X-ZCSRF-TOKEN': token,
-                        'servicename': 'ZohoCreator',
-                        'is_Ajax': 'true',
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
-                });
-                return { success: true, status: res.status, body: await res.text(), tokenUsed: token };
-            } catch (err) {
-                return { success: false, error: err.toString(), tokenUsed: token };
-            }
+        // INJECTION PROTOCOL: Forge headers globally on the browser, bypassing JS fetch restrictions
+        await page.setExtraHTTPHeaders({
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'X-ZCSRF-TOKEN': activeCsrfToken,
+            'servicename': 'ZohoCreator',
+            'is_Ajax': 'true',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://creatorapp.zoho.com/srm_university/academia-academic-services/'
         });
 
-        console.log(`[HANDSHAKE] Token Injected: ${profileRaw.tokenUsed}`);
-        console.log(`[HANDSHAKE] Injection Status: ${profileRaw.status}`);
-        console.log(`[HANDSHAKE] API Response (First 150 chars): ${profileRaw.body ? profileRaw.body.substring(0, 150).replace(/\n/g, '') : profileRaw.error}`);
+        let realName = "Classified Operative";
+        let profileRaw = "";
 
-        if (profileRaw.success && profileRaw.body) {
-            try {
-                const profileData = JSON.parse(profileRaw.body);
+        try {
+            console.log("[HANDSHAKE] Driving browser natively to the Profile API...");
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            
+            // Scrape the JSON text straight out of the DOM
+            profileRaw = await page.evaluate(extractJsonFromDom);
+            
+            console.log(`[HANDSHAKE] Profile Raw Data (First 150 chars): ${profileRaw ? profileRaw.substring(0, 150).replace(/\n/g, '') : "EMPTY"}`);
+
+            if (profileRaw) {
+                const profileData = JSON.parse(profileRaw);
                 const stringified = JSON.stringify(profileData);
                 const nameMatch = stringified.match(/"Name":"([^"]+)"/i) || stringified.match(/"Student_Name":"([^"]+)"/i);
                 
@@ -156,9 +150,9 @@ app.post('/api/handshake', async (req, res) => {
                 } else {
                     console.log("[HANDSHAKE] WARNING: 'Name' key not found in parsed JSON.");
                 }
-            } catch (e) {
-                console.log(`[HANDSHAKE] WARNING: Failed to parse Profile JSON.`);
             }
+        } catch (e) {
+            console.log(`[HANDSHAKE] WARNING: Native Navigation or JSON Parse Failed: ${e.message}`);
         }
         
         console.log(`[HANDSHAKE] Success! Extracted Name: ${realName}`);
@@ -249,52 +243,45 @@ app.post('/api/scrape', async (req, res) => {
         console.log("[SYNC] WAF Bypassed. Loading Visual Dashboard to establish secure cookies...");
         await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/', { waitUntil: 'networkidle2', timeout: 45000 });
         
-        console.log("[SYNC] Executing Browser Injection: Ripping JSON Data...");
+        const cookies = await page.cookies();
         
-        // INJECTION PROTOCOL: Extractor Mode
-        const rawExtraction = await page.evaluate(async () => {
-            const data = { timetableRaw: null, attendanceRaw: null, errors: [], tokenUsed: 'NOT_FOUND' };
-            
-            // Step 1: Steal the CSRF Token natively
-            let token = '';
-            if (typeof window.zccsr !== 'undefined') token = window.zccsr;
-            else if (window.ZohoHCAs && window.ZohoHCAs.zccsr) token = window.ZohoHCAs.zccsr;
-            else {
-                const match = document.cookie.match(/(?:^|;)\s*zccsr=([^;]+)/);
-                if (match) token = match[1];
-            }
+        let zccsr = cookies.find(c => c.name === 'zccsr')?.value || '';
+        if (!zccsr) {
+            zccsr = await page.evaluate(() => {
+                return typeof window !== 'undefined' && window.zccsr ? window.zccsr : '';
+            }).catch(() => '');
+        }
 
-            if (!token) {
-                const match2 = document.cookie.match(/(?:^|;)\s*iamcsr=([^;]+)/);
-                if (match2) token = match2[1];
-            }
-            
-            data.tokenUsed = token;
+        const iamcsr = cookies.find(c => c.name === 'iamcsr')?.value || '';
+        const activeCsrfToken = zccsr || iamcsr;
 
-            const headers = {
-                'Accept': 'application/json, text/javascript, */*; q=0.01',
-                'X-ZCSRF-TOKEN': token,
-                'servicename': 'ZohoCreator',
-                'is_Ajax': 'true',
-                'X-Requested-With': 'XMLHttpRequest'
-            };
-
-            // Step 2: Native Fetches
-            try {
-                const ttRes = await window.fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table', { headers });
-                data.timetableRaw = await ttRes.text();
-            } catch (e) { data.errors.push("TT Native Fetch Error: " + e.toString()); }
-            
-            try {
-                const attRes = await window.fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status', { headers });
-                data.attendanceRaw = await attRes.text();
-            } catch (e) { data.errors.push("Att Native Fetch Error: " + e.toString()); }
-            
-            return data;
+        console.log(`[SYNC] Tokens Found -> zccsr: ${zccsr ? "YES" : "NO"}, iamcsr: ${iamcsr ? "YES" : "NO"}`);
+        console.log("[SYNC] THE PHANTOM NAVIGATOR: Forging HTTP Headers at the Engine level...");
+        
+        await page.setExtraHTTPHeaders({
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'X-ZCSRF-TOKEN': activeCsrfToken,
+            'servicename': 'ZohoCreator',
+            'is_Ajax': 'true',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://creatorapp.zoho.com/srm_university/academia-academic-services/'
         });
 
+        let rawExtraction = { timetableRaw: null, attendanceRaw: null, errors: [] };
+
+        try {
+            console.log("[SYNC] Driving natively to Unified_Time_Table API...");
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            rawExtraction.timetableRaw = await page.evaluate(extractJsonFromDom);
+        } catch (e) { rawExtraction.errors.push("TT Nav Error: " + e.message); }
+        
+        try {
+            console.log("[SYNC] Driving natively to Academic_Status API...");
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            rawExtraction.attendanceRaw = await page.evaluate(extractJsonFromDom);
+        } catch (e) { rawExtraction.errors.push("Att Nav Error: " + e.message); }
+
         console.log(`\n[SYNC] --- EXTRACTION DIAGNOSTICS ---`);
-        console.log(`[SYNC] Token Injected: ${rawExtraction.tokenUsed}`);
         console.log(`[SYNC] Timetable Payload Length: ${rawExtraction.timetableRaw ? rawExtraction.timetableRaw.length : 0} bytes`);
         console.log(`[SYNC] Timetable Preview: ${rawExtraction.timetableRaw ? rawExtraction.timetableRaw.substring(0, 150).replace(/\n/g, '') : "NULL"}`);
         console.log(`[SYNC] Attendance Payload Length: ${rawExtraction.attendanceRaw ? rawExtraction.attendanceRaw.length : 0} bytes`);
