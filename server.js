@@ -27,7 +27,7 @@ app.post('/api/handshake', async (req, res) => {
         jar,
         withCredentials: true,
         timeout: 25000, 
-        validateStatus: () => true, // CRITICAL: Prevent Axios from crashing on 401/400 errors.
+        validateStatus: () => true, // Catch everything, do not crash on 401s
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
@@ -54,11 +54,11 @@ app.post('/api/handshake', async (req, res) => {
         const digest = lookupRes.data?.digest || '';
         const cookies = await jar.getCookies('https://accounts.zoho.com');
         const iamcsr = cookies.find(c => c.key === 'iamcsr')?.value || '';
-        const timestamp = Date.now();
+        let timestamp = Date.now();
         const serviceUrl = encodeURIComponent('https://creatorapp.zoho.com/srm_university/academia-academic-services/#');
 
         console.log("[AZURE PROXY] Step 3: Password Strike...");
-        const passRes = await client.post(
+        let passRes = await client.post(
             `https://accounts.zoho.com/signin/v2/primary/${encodeURIComponent(identifier)}/password?digest=${digest}&cli_time=${timestamp}&orgtype=40&service_language=en&serviceurl=${serviceUrl}`,
             { passwordauth: { password: password } },
             { 
@@ -71,9 +71,52 @@ app.post('/api/handshake', async (req, res) => {
             }
         );
 
-        if (passRes.status !== 200) {
-             console.error("[AZURE PROXY] Password Strike failed. Status:", passRes.status);
-             return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
+        // Convert response to string to safely parse HTML or JSON errors
+        let passBody = typeof passRes.data === 'object' ? JSON.stringify(passRes.data) : passRes.data;
+        console.log(`[AZURE PROXY] Password Strike Response Status: ${passRes.status}`);
+
+        // ==========================================
+        // THE GHOST SESSION TERMINATOR
+        // ==========================================
+        if (passBody.includes('Terminate all other sessions') || passBody.includes('maximum active sessions') || passBody.includes('activesessions')) {
+            console.log("[AZURE PROXY] ⚠️ GHOST SESSION LIMIT DETECTED. Executing Termination Protocol...");
+            try {
+                // Execute the DELETE command exactly as specified in the blueprints
+                await client.delete('https://accounts.zoho.com/webclient/v1/account/self/user/self/activesessions', {
+                    headers: {
+                        'X-ZCSRF-TOKEN': iamcsr,
+                        'is_Ajax': 'true'
+                    }
+                });
+                
+                console.log("[AZURE PROXY] 💥 Sessions Terminated. Retrying Password Strike...");
+                
+                // Regenerate Anti-Replay timestamp and strike again
+                timestamp = Date.now();
+                passRes = await client.post(
+                    `https://accounts.zoho.com/signin/v2/primary/${encodeURIComponent(identifier)}/password?digest=${digest}&cli_time=${timestamp}&orgtype=40&service_language=en&serviceurl=${serviceUrl}`,
+                    { passwordauth: { password: password } },
+                    { 
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'servicename': 'ZohoCreator', 
+                            'is_Ajax': 'true',
+                            'X-ZCSRF-TOKEN': iamcsr
+                        } 
+                    }
+                );
+                passBody = typeof passRes.data === 'object' ? JSON.stringify(passRes.data) : passRes.data;
+            } catch (termErr) {
+                console.error("[AZURE PROXY] Session Termination Failed:", termErr.message);
+            }
+        }
+
+        // ==========================================
+        // SMART ERROR HANDLING
+        // ==========================================
+        if (passBody.includes('INVALID_PASSWORD') || passBody.includes('Invalid Password') || passRes.status === 401) {
+            console.log("[AZURE PROXY] Zoho explicitly rejected the password.");
+            return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
         }
 
         console.log("[AZURE PROXY] Step 4: Extracting Profile JSON...");
@@ -90,6 +133,9 @@ app.post('/api/handshake', async (req, res) => {
             realName = nameParts.length > 2 ? `${nameParts[0]} ${nameParts[1]}` : nameMatch[1].trim();
             isWrapperVerified = true;
             console.log("[AZURE PROXY] SUCCESS! Extracted Name:", realName);
+        } else {
+            console.log("[AZURE PROXY] WARNING: Could not find student name in Profile JSON.");
+            console.log("[AZURE PROXY] Profile Response Snippet:", stringified.substring(0, 150));
         }
 
         return res.status(200).json({
