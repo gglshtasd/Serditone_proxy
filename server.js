@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.status(200).json({ status: "Active", service: "Serditone Dragnet Wiretap Gateway" });
+    res.status(200).json({ status: "Active", service: "Serditone Human Clicker & DOM Ripper" });
 });
 
 // ==========================================
@@ -33,54 +33,17 @@ app.post('/api/handshake', async (req, res) => {
                 '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
                 '--disable-gpu', '--no-first-run', '--disable-site-isolation-trials', 
                 '--window-size=1280,800', '--disable-blink-features=AutomationControlled',
-                '--incognito' // CRITICAL: Forces absolute amnesia. Never remembers old logins.
+                '--incognito' // CRITICAL: Absolute amnesia
             ]
         });
         
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36');
         
-        let realName = "Classified Operative";
-        let isProfileIntercepted = false;
-
-        // -------------------------------------------------------------------
-        // THE DRAGNET WIRETAP (Passive Network Interception)
-        // -------------------------------------------------------------------
-        console.log("[HANDSHAKE] 🕵️‍♂️ Dragnet Wiretap engaged. Listening to Network Stream...");
+        // Block images/media to save RAM, but let all scripts/fonts load for the UI
         await page.setRequestInterception(true);
-        
-        page.on('response', async (response) => {
-            if (isProfileIntercepted) return; 
-            
-            const req = response.request();
-            if (req.method() === 'OPTIONS') return; 
-
-            const type = req.resourceType();
-            if (type === 'xhr' || type === 'fetch') {
-                const url = req.url();
-                // Diagnostic log so we can see what Zoho is actually doing
-                console.log(`[WIRETAP-LOG] Zoho API call detected: ${url.substring(0, 80)}...`);
-                
-                try {
-                    const text = await response.text();
-                    const regNo = identifier.split('@')[0].toUpperCase();
-                    if (text.includes('"Name":') || text.includes('"Student_Name":') || text.includes(regNo)) {
-                        
-                        const match = text.match(/"Name":"([^"]+)"/i) || text.match(/"Student_Name":"([^"]+)"/i);
-                        if (match && match[1]) {
-                            const parts = match[1].trim().split(/\s+/);
-                            realName = parts.length > 2 ? `${parts[0]} ${parts[1]}` : match[1].trim();
-                            isProfileIntercepted = true;
-                            console.log(`\n[WIRETAP] 🚨 TARGET ACQUIRED FROM MID-AIR! Name: ${realName}\n`);
-                        }
-                    }
-                } catch (e) { /* Ignore non-JSON/binary network traffic */ }
-            }
-        });
-
-        // Continue normal request traffic, aggressively block images/media to save RAM
         page.on('request', (req) => { 
-            ['image', 'media'].includes(req.resourceType()) ? req.abort() : req.continue(); 
+            ['image', 'media', 'font'].includes(req.resourceType()) ? req.abort() : req.continue(); 
         });
 
         // -------------------------------------------------------------------
@@ -115,7 +78,6 @@ app.post('/api/handshake', async (req, res) => {
         if (pageContent.includes('Terminate all other sessions') || pageContent.includes('maximum active sessions')) {
             console.log("[HANDSHAKE] Ghost Session Limit Hit. Forcing termination...");
             try {
-                // Ensure we click the exact 'Continue' or 'Terminate' button
                 await page.evaluate(() => {
                     const btns = Array.from(document.querySelectorAll('.blue_btn, button, input[type="button"]'));
                     const termBtn = btns.find(b => b.value === 'Continue' || (b.innerText && (b.innerText.includes('Continue') || b.innerText.includes('Terminate'))));
@@ -128,69 +90,43 @@ app.post('/api/handshake', async (req, res) => {
         }
 
         // -------------------------------------------------------------------
-        // VISUAL NAVIGATION & WIRE SNIFFING
+        // VISUAL DOM RIPPER
         // -------------------------------------------------------------------
-        console.log("[HANDSHAKE] WAF Bypassed. Visually loading Student Profile Dashboard...");
+        console.log("[HANDSHAKE] WAF Bypassed. Waiting 8 seconds for React/Ember Dashboard to visually render...");
+        await new Promise(r => setTimeout(r, 8000));
         
-        await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/#Report:Student_Profile_Report', { waitUntil: 'domcontentloaded', timeout: 45000 });
-        
-        console.log("[HANDSHAKE] Waiting up to 15 seconds for Zoho's internal scripts to trigger the Wiretap...");
-        let waitLoops = 0;
-        
-        while (!isProfileIntercepted && waitLoops < 15) {
-            await new Promise(r => setTimeout(r, 1000));
-            waitLoops++;
-            
-            if (waitLoops === 5) {
-                console.log("[HANDSHAKE] Network quiet. Executing DOM Fallback Clicker...");
-                await page.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a, span, div, li'));
-                    const profileBtn = links.find(l => l.innerText && (l.innerText.includes('Profile') || l.innerText.includes('Student')));
-                    if (profileBtn) profileBtn.click();
-                    else window.location.hash = '#Report:Student_Profile_Report';
-                });
-            }
-        }
+        console.log("[HANDSHAKE] 🕵️‍♂️ Executing Deep DOM visual scan for Name...");
+        let realName = "Classified Operative";
 
-        // -------------------------------------------------------------------
-        // THE DEEP VISUAL SCANNER (Ultimate Fallback)
-        // -------------------------------------------------------------------
-        if (!isProfileIntercepted) {
-            console.log("[HANDSHAKE] WARNING: Wiretap timed out. Executing Deep DOM visual scan for Name...");
+        const extractedVisualName = await page.evaluate((regNo) => {
+            let foundName = "";
             
-            const extractedVisualName = await page.evaluate((regNo) => {
-                let foundName = "";
-                
-                // 1. Check standard Zoho user profile DOM elements
-                const userEl = document.querySelector('.zcSidenavUserName, .user-name, [data-zcqa="user_name"]');
-                if (userEl && userEl.innerText) {
-                    foundName = userEl.innerText.trim();
-                    return foundName;
-                } 
-                
-                // 2. Aggressive DOM scan: Find the Register Number on screen, and the name is usually near it
-                const elements = document.querySelectorAll('span, div, td, p');
-                for(let el of elements) {
-                    if (el.innerText && el.innerText.toUpperCase().includes(regNo.toUpperCase())) {
-                        // Attempt to clean the string to extract just the name
-                        let cleanText = el.innerText.replace(new RegExp(regNo, 'gi'), '').replace(/[^a-zA-Z\s]/g, '').trim();
-                        // Filter out common labels
-                        cleanText = cleanText.replace(/Register Number|Student Name|Program|Branch/gi, '').trim();
-                        if(cleanText.length > 3 && cleanText.length < 40) {
-                            foundName = cleanText;
-                            break;
-                        }
+            // 1. Check standard Zoho user profile DOM elements
+            const userEl = document.querySelector('.zcSidenavUserName, .user-name, [data-zcqa="user_name"]');
+            if (userEl && userEl.innerText) return userEl.innerText.trim();
+            
+            // 2. Aggressive DOM scan: Find the Register Number on screen, and grab surrounding text
+            const elements = document.querySelectorAll('span, div, td, p, h1, h2, h3, h4');
+            for(let el of elements) {
+                if (el.innerText && el.innerText.toUpperCase().includes(regNo.toUpperCase())) {
+                    let cleanText = el.innerText.replace(new RegExp(regNo, 'gi'), '').replace(/[^a-zA-Z\s]/g, '').trim();
+                    cleanText = cleanText.replace(/Register Number|Student Name|Program|Branch|Welcome/gi, '').trim();
+                    if(cleanText.length > 3 && cleanText.length < 40) {
+                        return cleanText;
                     }
                 }
-                return foundName;
-            }, identifier.split('@')[0]);
-
-            if (extractedVisualName) {
-                realName = extractedVisualName;
-                console.log(`[HANDSHAKE] Visual Scanner successful. Name found: ${realName}`);
-            } else {
-                console.log("[HANDSHAKE] Visual Scanner failed. Defaulting to Classified Operative.");
             }
+            return foundName;
+        }, identifier.split('@')[0]);
+
+        if (extractedVisualName) {
+            realName = extractedVisualName;
+            console.log(`[HANDSHAKE] Visual Scanner successful. Name found: ${realName}`);
+        } else {
+            console.log("[HANDSHAKE] Visual Scanner failed to find exact match. Defaulting to Classified Operative.");
+            // Print out the first 200 characters of the page to see what loaded
+            const debugText = await page.evaluate(() => document.body.innerText.substring(0, 200).replace(/\n/g, ' '));
+            console.log(`[HANDSHAKE] Screen Contents Preview: ${debugText}`);
         }
         
         console.log(`[HANDSHAKE] Success! Final Assessed Name: ${realName}`);
@@ -212,7 +148,7 @@ app.post('/api/scrape', async (req, res) => {
     if (!identifier || !password) return res.status(400).json({ success: false, error: "Missing payload." });
     
     console.log(`\n=========================================`);
-    console.log(`[SYNC ENGINE] Deep Extraction Initiated for: ${identifier}`);
+    console.log(`[SYNC ENGINE] Human-Clicker Extraction Initiated for: ${identifier}`);
     console.log(`=========================================`);
     
     let browser;
@@ -232,44 +168,9 @@ app.post('/api/scrape', async (req, res) => {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36');
         
-        let timetableRaw = null;
-        let attendanceRaw = null;
-
-        // -------------------------------------------------------------------
-        // THE DRAGNET WIRETAP
-        // -------------------------------------------------------------------
-        console.log("[SYNC] 🕵️‍♂️ Dragnet Wiretap engaged. Monitoring for Timetable & Attendance payloads...");
         await page.setRequestInterception(true);
-        
-        page.on('response', async (response) => {
-            const req = response.request();
-            if (req.method() === 'OPTIONS') return;
-
-            const type = req.resourceType();
-            if (type === 'xhr' || type === 'fetch') {
-                const url = req.url();
-                console.log(`[WIRETAP-LOG] Zoho API call detected: ${url.substring(0, 80)}...`);
-
-                try {
-                    const text = await response.text();
-                    
-                    if (!timetableRaw && (text.includes('Unified_Time_Table') || text.includes('Day_Order') || text.includes('Class_Timing'))) {
-                        timetableRaw = text;
-                        console.log(`\n[WIRETAP] 🚨 TIMETABLE INTERCEPTED! (${text.length} bytes)`);
-                        console.log(`[WIRETAP] Preview: ${text.substring(0, 100).replace(/\n/g, '')}...`);
-                    }
-                    
-                    if (!attendanceRaw && (text.includes('Academic_Status') || text.includes('Attendance_Percentage') || text.includes('Present'))) {
-                        attendanceRaw = text;
-                        console.log(`\n[WIRETAP] 🚨 ATTENDANCE INTERCEPTED! (${text.length} bytes)`);
-                        console.log(`[WIRETAP] Preview: ${text.substring(0, 100).replace(/\n/g, '')}...`);
-                    }
-                } catch (e) { /* ignore binary/image intercepts */ }
-            }
-        });
-
         page.on('request', (req) => { 
-            ['image', 'media'].includes(req.resourceType()) ? req.abort() : req.continue(); 
+            ['image', 'media', 'font'].includes(req.resourceType()) ? req.abort() : req.continue(); 
         });
 
         // -------------------------------------------------------------------
@@ -310,66 +211,94 @@ app.post('/api/scrape', async (req, res) => {
                     if (termBtn) termBtn.click(); 
                 });
                 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-            } catch (e) {
-                console.log("[SYNC] Warning: Termination auto-clicker struggled.");
-            }
+            } catch (e) {}
         }
 
-        console.log("[SYNC] WAF Bypassed. Executing Visual Navigation Protocols...");
+        console.log("[SYNC] WAF Bypassed. Waiting 6 seconds for initial Dashboard render...");
+        await new Promise(r => setTimeout(r, 6000));
+
+        let extractedData = { timetableHtml: null, attendanceHtml: null, logs: [] };
 
         // -------------------------------------------------------------------
-        // PROTOCOL 1: HUNT THE TIMETABLE
+        // PROTOCOL 1: HUMAN CLICK & RIP (TIMETABLE)
         // -------------------------------------------------------------------
-        console.log("[SYNC] Navigating to Timetable Visual Interface...");
-        await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/#Report:Unified_Time_Table', { waitUntil: 'domcontentloaded', timeout: 30000 });
-        
-        let ttWait = 0;
-        while (!timetableRaw && ttWait < 15) {
-            await new Promise(r => setTimeout(r, 1000));
-            ttWait++;
-            if (ttWait === 5) {
-                console.log("[SYNC] Network quiet. Executing DOM Fallback Clicker for Timetable...");
-                await page.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a, span, div, li'));
-                    const ttLink = links.find(l => l.innerText && l.innerText.includes('Time Table'));
-                    if (ttLink) ttLink.click();
-                });
+        console.log("[SYNC] 🖱️ Hunting for 'Time Table' button...");
+        const clickedTT = await page.evaluate(() => {
+            const elements = Array.from(document.querySelectorAll('a, span, div, li, p'));
+            // Find any element containing the words
+            const target = elements.find(el => el.innerText && (el.innerText.includes('Time Table') || el.innerText.includes('Unified Time')));
+            if (target) {
+                target.click();
+                return true;
             }
+            return false;
+        });
+
+        if (clickedTT) {
+            console.log("[SYNC] 'Time Table' clicked! Waiting 6 seconds for page to load...");
+            extractedData.logs.push("Timetable button clicked.");
+            await new Promise(r => setTimeout(r, 6000)); // Wait for visual render
+            
+            console.log("[SYNC] Ripping HTML from screen...");
+            extractedData.timetableHtml = await page.evaluate(() => {
+                // Grab the largest table on the screen, or fallback to the main body text
+                const table = document.querySelector('table');
+                return table ? table.outerHTML : document.body.innerText.substring(0, 5000);
+            });
+            console.log(`[SYNC] Timetable Rip Success: ${extractedData.timetableHtml.substring(0, 100).replace(/\n/g, '')}...`);
+        } else {
+            console.log("[SYNC] ❌ Could not find 'Time Table' button on screen.");
+            extractedData.logs.push("Timetable button NOT FOUND.");
         }
 
         // -------------------------------------------------------------------
-        // PROTOCOL 2: HUNT THE ATTENDANCE
+        // PROTOCOL 2: HUMAN CLICK & RIP (ATTENDANCE)
         // -------------------------------------------------------------------
-        console.log("[SYNC] Navigating to Attendance Visual Interface...");
-        await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/#Report:Academic_Status', { waitUntil: 'domcontentloaded', timeout: 30000 });
-        
-        let attWait = 0;
-        while (!attendanceRaw && attWait < 15) {
-            await new Promise(r => setTimeout(r, 1000));
-            attWait++;
-            if (attWait === 5) {
-                console.log("[SYNC] Network quiet. Executing DOM Fallback Clicker for Attendance...");
-                await page.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a, span, div, li'));
-                    const attLink = links.find(l => l.innerText && (l.innerText.includes('Academic Status') || l.innerText.includes('Attendance')));
-                    if (attLink) attLink.click();
-                });
+        console.log("[SYNC] 🖱️ Hunting for 'Academic Status / Attendance' button...");
+        const clickedAtt = await page.evaluate(() => {
+            const elements = Array.from(document.querySelectorAll('a, span, div, li, p'));
+            const target = elements.find(el => el.innerText && (el.innerText.includes('Academic Status') || el.innerText.includes('Attendance')));
+            if (target) {
+                target.click();
+                return true;
             }
+            return false;
+        });
+
+        if (clickedAtt) {
+            console.log("[SYNC] 'Attendance' clicked! Waiting 6 seconds for page to load...");
+            extractedData.logs.push("Attendance button clicked.");
+            await new Promise(r => setTimeout(r, 6000));
+            
+            console.log("[SYNC] Ripping HTML from screen...");
+            extractedData.attendanceHtml = await page.evaluate(() => {
+                const table = document.querySelector('table');
+                return table ? table.outerHTML : document.body.innerText.substring(0, 5000);
+            });
+            console.log(`[SYNC] Attendance Rip Success: ${extractedData.attendanceHtml.substring(0, 100).replace(/\n/g, '')}...`);
+        } else {
+            console.log("[SYNC] ❌ Could not find 'Attendance' button on screen.");
+            extractedData.logs.push("Attendance button NOT FOUND.");
         }
 
         console.log(`\n[SYNC] --- MISSION REPORT ---`);
-        console.log(`[SYNC] Timetable Captured: ${timetableRaw ? "YES" : "NO"}`);
-        console.log(`[SYNC] Attendance Captured: ${attendanceRaw ? "YES" : "NO"}`);
+        console.log(`[SYNC] Timetable HTML Extracted: ${extractedData.timetableHtml ? "YES" : "NO"}`);
+        console.log(`[SYNC] Attendance HTML Extracted: ${extractedData.attendanceHtml ? "YES" : "NO"}`);
         console.log(`[SYNC] ----------------------\n`);
-
-        let extractedData = { timetable: null, attendance: null };
-        try { if (timetableRaw) extractedData.timetable = JSON.parse(timetableRaw); } catch(e) { console.log("[SYNC] Timetable JSON Parse Failed."); }
-        try { if (attendanceRaw) extractedData.attendance = JSON.parse(attendanceRaw); } catch(e) { console.log("[SYNC] Attendance JSON Parse Failed."); }
 
         console.log("[SYNC] Extraction Complete. Returning payload to Vercel.");
         await browser.close().catch(()=>{});
         
-        return res.status(200).json({ success: true, data: extractedData });
+        // Pass the raw text/HTML strings back to Vercel. We map it to "timetable" and "attendance" 
+        // so your Vercel database accepts it as valid JSON strings.
+        return res.status(200).json({ 
+            success: true, 
+            data: {
+                timetable: extractedData.timetableHtml || "NO_DATA",
+                attendance: extractedData.attendanceHtml || "NO_DATA",
+                diagnostics: extractedData.logs
+            } 
+        });
 
     } catch (error) {
         console.error("[SYNC] FATAL ENGINE CRASH:", error.message);
