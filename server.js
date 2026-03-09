@@ -10,9 +10,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Proxy Health Check
 app.get('/', (req, res) => {
-    res.status(200).json({ status: "Active", service: "Serditone Native Stealth Gateway" });
+    res.status(200).json({ status: "Active", service: "Serditone Bulletproof Gateway" });
 });
 
 app.post('/api/handshake', async (req, res) => {
@@ -22,12 +21,15 @@ app.post('/api/handshake', async (req, res) => {
         return res.status(400).json({ success: false, error: "Missing payload requirements." });
     }
 
-    console.log(`[PUPPETEER] Booting Stealth Engine for: ${identifier}`);
+    console.log(`\n=========================================`);
+    console.log(`[PUPPETEER] Booting Engine for: ${identifier}`);
+    console.log(`=========================================`);
+    
     let browser;
     let page;
 
     try {
-        // Launch using the Native Debian Chromium binary with Stealth
+        // EXTREME LOW-RAM CHROMIUM CONFIGURATION
         browser = await puppeteer.launch({
             headless: "new",
             executablePath: '/usr/bin/chromium', 
@@ -40,24 +42,26 @@ app.post('/api/handshake', async (req, res) => {
                 '--no-zygote',             
                 '--no-first-run',
                 '--disable-extensions',
-                '--window-size=1280,800',
-                '--disable-blink-features=AutomationControlled' // Extra WAF Evasion
+                '--disable-site-isolation-trials', // MASSIVE RAM SAVER
+                '--disable-features=IsolateOrigins,site-per-process', // Prevents Chrome from creating new memory processes
+                '--js-flags="--max-old-space-size=256"', // Limits V8 JS Engine RAM
+                '--window-size=1024,768',
+                '--disable-blink-features=AutomationControlled'
             ]
         });
 
         page = await browser.newPage();
         
-        // Advanced Anti-Bot Mimicry
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
         await page.setExtraHTTPHeaders({ 
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
         });
 
-        // Block images and CSS to save RAM, but allow scripts (Zoho needs JS to render the login page)
+        // Aggressively block heavy resources
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+            if (['image', 'stylesheet', 'font', 'media', 'websocket'].includes(req.resourceType())) {
                 req.abort();
             } else {
                 req.continue();
@@ -65,34 +69,49 @@ app.post('/api/handshake', async (req, res) => {
         });
 
         console.log("[PUPPETEER] Navigating to Academia...");
-        await page.goto('https://academia.srmist.edu.in/', { waitUntil: 'networkidle2', timeout: 35000 });
+        // Increase navigation timeout to 60 seconds for the slow 1GB VM
+        await page.goto('https://academia.srmist.edu.in/', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // Step 1: Enter Username (Increased timeout to 20s to account for slow Zoho redirects)
         console.log("[PUPPETEER] Waiting for Zoho IAM Redirect...");
-        await page.waitForSelector('input[id="login_id"]', { timeout: 20000 });
+        
+        // MICRO-CATCH: The X-Ray Trap for the Username Box
+        try {
+            // Give it 45 seconds to redirect and render the box
+            await page.waitForSelector('input[id="login_id"]', { timeout: 45000 });
+        } catch (selectorErr) {
+            console.error("[PUPPETEER] ❌ FAILED TO FIND USERNAME BOX.");
+            const htmlDump = await page.content();
+            console.error("============= X-RAY HTML DUMP =============");
+            console.error(htmlDump.substring(0, 1500)); // Print first 1500 chars to terminal
+            console.error("===========================================");
+            throw new Error("Zoho WAF Blocked the login page or OS killed process.");
+        }
         
         console.log("[PUPPETEER] Entering Identifier...");
-        await page.type('input[id="login_id"]', identifier, { delay: 65 }); // Human-like typing delay
+        await page.type('input[id="login_id"]', identifier, { delay: 40 }); 
         await page.click('button[id="nextbtn"]');
 
-        // Step 2: Enter Password
         console.log("[PUPPETEER] Entering Password...");
-        await page.waitForSelector('input[id="password"]', { timeout: 15000 });
-        await new Promise(resolve => setTimeout(resolve, 800)); 
-        await page.type('input[id="password"]', password, { delay: 65 });
+        try {
+            await page.waitForSelector('input[id="password"]', { timeout: 30000 });
+        } catch (passErr) {
+            console.error("[PUPPETEER] ❌ FAILED TO FIND PASSWORD BOX.");
+            const htmlDump = await page.content();
+            console.error(htmlDump.substring(0, 1000));
+            throw new Error("Zoho intercepted midway.");
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1000)); 
+        await page.type('input[id="password"]', password, { delay: 40 });
         
-        // Wait for navigation after clicking sign in
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {}),
             page.click('button[id="nextbtn"]')
         ]);
 
         console.log("[PUPPETEER] Analyzing Post-Login DOM State...");
         const pageContent = await page.content();
 
-        // -----------------------------------------------------
-        // ERROR HANDLING & GHOST SESSION TERMINATOR
-        // -----------------------------------------------------
         if (pageContent.includes('Invalid Password') || pageContent.includes('INVALID_PASSWORD')) {
             console.log("[PUPPETEER] Rejected: Incorrect Password.");
             await browser.close();
@@ -100,10 +119,10 @@ app.post('/api/handshake', async (req, res) => {
         }
 
         if (pageContent.includes('Terminate all other sessions') || pageContent.includes('maximum active sessions')) {
-            console.log("[PUPPETEER] Ghost Session Limit Detected! Clicking Terminate button...");
+            console.log("[PUPPETEER] Ghost Session Limit Detected! Terminating...");
             try {
                 await Promise.all([
-                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
+                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
                     page.evaluate(() => {
                         const btns = Array.from(document.querySelectorAll('.blue_btn, button'));
                         const termBtn = btns.find(b => b.textContent.includes('Terminate') || b.textContent.includes('Continue'));
@@ -111,15 +130,11 @@ app.post('/api/handshake', async (req, res) => {
                     })
                 ]);
             } catch (e) {
-                console.log("[PUPPETEER] Warning: Failed to click Terminate button natively.");
+                console.log("[PUPPETEER] Warning: Failed to click Terminate natively.");
             }
         }
 
-        // -----------------------------------------------------
-        // DATA EXTRACTION (The Profile API)
-        // -----------------------------------------------------
         console.log("[PUPPETEER] Requesting Profile Database JSON...");
-        
         const profileData = await page.evaluate(async () => {
             try {
                 const response = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
@@ -154,27 +169,12 @@ app.post('/api/handshake', async (req, res) => {
 
     } catch (error) {
         console.error("[PUPPETEER] Hard crash:", error.message);
-        
-        // THE DOM X-RAY: If we crash, dump the HTML so we can see what blocked us
-        if (page) {
-            try {
-                const htmlDump = await page.content();
-                console.error("============= X-RAY HTML DUMP =============");
-                // We slice to 1000 characters so we don't flood the terminal, but enough to see the <title> or <body> error
-                console.error(htmlDump.substring(0, 1000)); 
-                console.error("===========================================");
-            } catch (e) {
-                console.error("Could not extract X-Ray HTML.");
-            }
-        }
-
         if (browser) await browser.close();
         return res.status(500).json({ success: false, error: "VM Browser Engine Failure", details: error.message });
     }
 });
 
 const PORT = process.env.PORT || 8080;
-
 app.listen(PORT, () => {
-    console.log(`[VM GATEWAY] Serditone Stealth Gateway running on port ${PORT}`);
+    console.log(`[VM GATEWAY] Serditone Bulletproof Gateway running on port ${PORT}`);
 });
