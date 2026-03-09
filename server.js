@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
+const { execSync } = require('child_process');
 
 const app = express();
 app.use(cors());
@@ -152,6 +153,19 @@ app.post('/api/handshake', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
+
+// ============================================================================
+// AZURE SELF-HEALING BOOT SEQUENCE
+// Force downloads the Chrome binary into the container before starting Express
+// ============================================================================
+console.log("[AZURE] Verifying/Installing Chrome binary for the cloud environment...");
+try {
+    execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
+    console.log("[AZURE] Chrome binary is ready.");
+} catch (installError) {
+    console.error("[AZURE] Warning: Failed to run browser install command:", installError.message);
+}
+
 app.listen(PORT, () => {
     console.log(`[AZURE] Serditone Puppeteer Gateway running on port ${PORT}`);
 });
