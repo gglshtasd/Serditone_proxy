@@ -228,5 +228,5 @@ app.post('/api/scrape', async (req, res) => {
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`[VM GATEWAY] Serditone Deep Scraper running on port ${PORT}`));
-```
+
 
