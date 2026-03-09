@@ -25,14 +25,15 @@ app.post('/api/handshake', async (req, res) => {
     
     let browser;
     try {
-        console.log("[HANDSHAKE] Booting Native Chromium Engine...");
+        console.log("[HANDSHAKE] Booting Native Chromium Engine (Incognito Mode)...");
         browser = await puppeteer.launch({
             headless: "new",
             executablePath: '/usr/bin/chromium', 
             args: [
                 '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
                 '--disable-gpu', '--no-first-run', '--disable-site-isolation-trials', 
-                '--window-size=1280,800', '--disable-blink-features=AutomationControlled'
+                '--window-size=1280,800', '--disable-blink-features=AutomationControlled',
+                '--incognito' // CRITICAL: Forces absolute amnesia. Never remembers old logins.
             ]
         });
         
@@ -49,16 +50,19 @@ app.post('/api/handshake', async (req, res) => {
         await page.setRequestInterception(true);
         
         page.on('response', async (response) => {
-            if (isProfileIntercepted) return; // Stop if we already got it
+            if (isProfileIntercepted) return; 
             
             const req = response.request();
-            if (req.method() === 'OPTIONS') return; // Ignore preflight checks
+            if (req.method() === 'OPTIONS') return; 
 
             const type = req.resourceType();
             if (type === 'xhr' || type === 'fetch') {
+                const url = req.url();
+                // Diagnostic log so we can see what Zoho is actually doing
+                console.log(`[WIRETAP-LOG] Zoho API call detected: ${url.substring(0, 80)}...`);
+                
                 try {
                     const text = await response.text();
-                    // Does this JSON payload contain the student's ID or Name?
                     const regNo = identifier.split('@')[0].toUpperCase();
                     if (text.includes('"Name":') || text.includes('"Student_Name":') || text.includes(regNo)) {
                         
@@ -74,7 +78,7 @@ app.post('/api/handshake', async (req, res) => {
             }
         });
 
-        // Continue normal request traffic
+        // Continue normal request traffic, aggressively block images/media to save RAM
         page.on('request', (req) => { 
             ['image', 'media'].includes(req.resourceType()) ? req.abort() : req.continue(); 
         });
@@ -85,14 +89,17 @@ app.post('/api/handshake', async (req, res) => {
         console.log("[HANDSHAKE] Navigating to Zoho IAM Public Portal...");
         await page.goto('https://accounts.zoho.com/signin?servicename=ZohoCreator&serviceurl=https://creatorapp.zoho.com/srm_university/academia-academic-services/', { waitUntil: 'networkidle2', timeout: 60000 });
         
+        console.log("[HANDSHAKE] Entering Identifier...");
         await page.waitForSelector('input[id="login_id"]', { timeout: 45000 });
         await page.type('input[id="login_id"]', identifier, { delay: 40 }); 
         await page.click('button[id="nextbtn"]');
         
+        console.log("[HANDSHAKE] Entering Password...");
         await page.waitForSelector('input[id="password"]', { timeout: 30000 });
         await new Promise(r => setTimeout(r, 1000)); 
         await page.type('input[id="password"]', password, { delay: 40 });
         
+        console.log("[HANDSHAKE] Executing Strike...");
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {}), 
             page.click('button[id="nextbtn"]')
@@ -105,18 +112,19 @@ app.post('/api/handshake', async (req, res) => {
             return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
         }
 
-        if (pageContent.includes('Terminate all other sessions')) {
-            console.log("[HANDSHAKE] Ghost Session Limit Hit. Terminating old sessions...");
+        if (pageContent.includes('Terminate all other sessions') || pageContent.includes('maximum active sessions')) {
+            console.log("[HANDSHAKE] Ghost Session Limit Hit. Forcing termination...");
             try {
-                await Promise.all([
-                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }), 
-                    page.evaluate(() => { 
-                        const btns = Array.from(document.querySelectorAll('.blue_btn, button')); 
-                        const termBtn = btns.find(b => b.textContent.includes('Terminate') || b.textContent.includes('Continue')); 
-                        if (termBtn) termBtn.click(); 
-                    })
-                ]);
-            } catch (e) { }
+                // Ensure we click the exact 'Continue' or 'Terminate' button
+                await page.evaluate(() => {
+                    const btns = Array.from(document.querySelectorAll('.blue_btn, button, input[type="button"]'));
+                    const termBtn = btns.find(b => b.value === 'Continue' || (b.innerText && (b.innerText.includes('Continue') || b.innerText.includes('Terminate'))));
+                    if (termBtn) termBtn.click();
+                });
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+            } catch (e) {
+                console.log("[HANDSHAKE] Warning: Termination auto-clicker struggled.");
+            }
         }
 
         // -------------------------------------------------------------------
@@ -124,7 +132,6 @@ app.post('/api/handshake', async (req, res) => {
         // -------------------------------------------------------------------
         console.log("[HANDSHAKE] WAF Bypassed. Visually loading Student Profile Dashboard...");
         
-        // Drive visually to the specific profile component hash. Zoho's JS will naturally fetch the data.
         await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/#Report:Student_Profile_Report', { waitUntil: 'domcontentloaded', timeout: 45000 });
         
         console.log("[HANDSHAKE] Waiting up to 15 seconds for Zoho's internal scripts to trigger the Wiretap...");
@@ -134,7 +141,6 @@ app.post('/api/handshake', async (req, res) => {
             await new Promise(r => setTimeout(r, 1000));
             waitLoops++;
             
-            // EDGE CASE FIX: If 5 seconds pass and no data flies by, forcefully click the sidebar to trigger it
             if (waitLoops === 5) {
                 console.log("[HANDSHAKE] Network quiet. Executing DOM Fallback Clicker...");
                 await page.evaluate(() => {
@@ -146,11 +152,48 @@ app.post('/api/handshake', async (req, res) => {
             }
         }
 
+        // -------------------------------------------------------------------
+        // THE DEEP VISUAL SCANNER (Ultimate Fallback)
+        // -------------------------------------------------------------------
         if (!isProfileIntercepted) {
-            console.log("[HANDSHAKE] WARNING: Wiretap timed out. Profile payload never crossed the network. Using default name.");
+            console.log("[HANDSHAKE] WARNING: Wiretap timed out. Executing Deep DOM visual scan for Name...");
+            
+            const extractedVisualName = await page.evaluate((regNo) => {
+                let foundName = "";
+                
+                // 1. Check standard Zoho user profile DOM elements
+                const userEl = document.querySelector('.zcSidenavUserName, .user-name, [data-zcqa="user_name"]');
+                if (userEl && userEl.innerText) {
+                    foundName = userEl.innerText.trim();
+                    return foundName;
+                } 
+                
+                // 2. Aggressive DOM scan: Find the Register Number on screen, and the name is usually near it
+                const elements = document.querySelectorAll('span, div, td, p');
+                for(let el of elements) {
+                    if (el.innerText && el.innerText.toUpperCase().includes(regNo.toUpperCase())) {
+                        // Attempt to clean the string to extract just the name
+                        let cleanText = el.innerText.replace(new RegExp(regNo, 'gi'), '').replace(/[^a-zA-Z\s]/g, '').trim();
+                        // Filter out common labels
+                        cleanText = cleanText.replace(/Register Number|Student Name|Program|Branch/gi, '').trim();
+                        if(cleanText.length > 3 && cleanText.length < 40) {
+                            foundName = cleanText;
+                            break;
+                        }
+                    }
+                }
+                return foundName;
+            }, identifier.split('@')[0]);
+
+            if (extractedVisualName) {
+                realName = extractedVisualName;
+                console.log(`[HANDSHAKE] Visual Scanner successful. Name found: ${realName}`);
+            } else {
+                console.log("[HANDSHAKE] Visual Scanner failed. Defaulting to Classified Operative.");
+            }
         }
         
-        console.log(`[HANDSHAKE] Success! Extracted Name: ${realName}`);
+        console.log(`[HANDSHAKE] Success! Final Assessed Name: ${realName}`);
         await browser.close().catch(()=>{});
         return res.status(200).json({ success: true, realName: realName, isWrapperVerified: true });
         
@@ -174,14 +217,15 @@ app.post('/api/scrape', async (req, res) => {
     
     let browser;
     try {
-        console.log("[SYNC] Booting Native Chromium Engine...");
+        console.log("[SYNC] Booting Native Chromium Engine (Incognito Mode)...");
         browser = await puppeteer.launch({
             headless: "new",
             executablePath: '/usr/bin/chromium', 
             args: [
                 '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
                 '--disable-gpu', '--no-first-run', '--disable-site-isolation-trials', 
-                '--window-size=1280,800', '--disable-blink-features=AutomationControlled'
+                '--window-size=1280,800', '--disable-blink-features=AutomationControlled',
+                '--incognito'
             ]
         });
         
@@ -203,17 +247,18 @@ app.post('/api/scrape', async (req, res) => {
 
             const type = req.resourceType();
             if (type === 'xhr' || type === 'fetch') {
+                const url = req.url();
+                console.log(`[WIRETAP-LOG] Zoho API call detected: ${url.substring(0, 80)}...`);
+
                 try {
                     const text = await response.text();
                     
-                    // Is this the Timetable?
                     if (!timetableRaw && (text.includes('Unified_Time_Table') || text.includes('Day_Order') || text.includes('Class_Timing'))) {
                         timetableRaw = text;
                         console.log(`\n[WIRETAP] 🚨 TIMETABLE INTERCEPTED! (${text.length} bytes)`);
                         console.log(`[WIRETAP] Preview: ${text.substring(0, 100).replace(/\n/g, '')}...`);
                     }
                     
-                    // Is this the Attendance?
                     if (!attendanceRaw && (text.includes('Academic_Status') || text.includes('Attendance_Percentage') || text.includes('Present'))) {
                         attendanceRaw = text;
                         console.log(`\n[WIRETAP] 🚨 ATTENDANCE INTERCEPTED! (${text.length} bytes)`);
@@ -230,16 +275,20 @@ app.post('/api/scrape', async (req, res) => {
         // -------------------------------------------------------------------
         // LOGIN & WAF BYPASS
         // -------------------------------------------------------------------
+        console.log("[SYNC] Navigating to Zoho IAM Public Portal...");
         await page.goto('https://accounts.zoho.com/signin?servicename=ZohoCreator&serviceurl=https://creatorapp.zoho.com/srm_university/academia-academic-services/', { waitUntil: 'networkidle2', timeout: 60000 });
         
+        console.log("[SYNC] Entering Identifier...");
         await page.waitForSelector('input[id="login_id"]', { timeout: 45000 });
         await page.type('input[id="login_id"]', identifier, { delay: 40 }); 
         await page.click('button[id="nextbtn"]');
         
+        console.log("[SYNC] Entering Password...");
         await page.waitForSelector('input[id="password"]', { timeout: 30000 });
         await new Promise(r => setTimeout(r, 1000)); 
         await page.type('input[id="password"]', password, { delay: 40 });
         
+        console.log("[SYNC] Executing Strike...");
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {}), 
             page.click('button[id="nextbtn"]')
@@ -247,21 +296,23 @@ app.post('/api/scrape', async (req, res) => {
         
         const pageContent = await page.content();
         if (pageContent.includes('Invalid Password') || pageContent.includes('INVALID_PASSWORD')) {
+            console.log("[SYNC] Strike Failed: Incorrect Password.");
             await browser.close().catch(()=>{});
             return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
         }
 
-        if (pageContent.includes('Terminate all other sessions')) {
+        if (pageContent.includes('Terminate all other sessions') || pageContent.includes('maximum active sessions')) {
+            console.log("[SYNC] Ghost Session Limit Hit. Forcing termination...");
             try { 
-                await Promise.all([
-                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }), 
-                    page.evaluate(() => { 
-                        const btns = Array.from(document.querySelectorAll('.blue_btn, button')); 
-                        const termBtn = btns.find(b => b.textContent.includes('Terminate') || b.textContent.includes('Continue')); 
-                        if (termBtn) termBtn.click(); 
-                    })
-                ]); 
-            } catch (e) {}
+                await page.evaluate(() => { 
+                    const btns = Array.from(document.querySelectorAll('.blue_btn, button, input[type="button"]')); 
+                    const termBtn = btns.find(b => b.value === 'Continue' || (b.innerText && (b.innerText.includes('Continue') || b.innerText.includes('Terminate')))); 
+                    if (termBtn) termBtn.click(); 
+                });
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+            } catch (e) {
+                console.log("[SYNC] Warning: Termination auto-clicker struggled.");
+            }
         }
 
         console.log("[SYNC] WAF Bypassed. Executing Visual Navigation Protocols...");
