@@ -13,12 +13,11 @@ app.get('/', (req, res) => {
     res.status(200).json({ status: "Active", service: "Serditone Azure BFF Gateway" });
 });
 
-// The Heavy-Lifting Handshake Route
 app.post('/api/handshake', async (req, res) => {
     const { identifier, password } = req.body;
 
     if (!identifier || !password) {
-        return res.status(400).json({ error: "Missing payload requirements." });
+        return res.status(400).json({ success: false, error: "Missing payload requirements." });
     }
 
     console.log(`[AZURE PROXY] Initiating Handshake for: ${identifier}`);
@@ -27,7 +26,8 @@ app.post('/api/handshake', async (req, res) => {
     const client = wrapper(axios.create({
         jar,
         withCredentials: true,
-        timeout: 25000, // Azure allows long timeouts! We use 25 seconds here.
+        timeout: 25000, 
+        validateStatus: () => true, // CRITICAL: Prevent Axios from crashing on 401/400 errors.
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
@@ -37,16 +37,19 @@ app.post('/api/handshake', async (req, res) => {
     }));
 
     try {
-        // Step 1: Tenant Discovery
         console.log("[AZURE PROXY] Step 1: Tenant Discovery...");
         await client.get('https://accounts.zoho.com/signin/v2/primary/10102608122/2727643000350339143/10002227248');
 
-        // Step 2: Token Harvest
         console.log("[AZURE PROXY] Step 2: Token Harvest...");
         const lookupRes = await client.post('https://accounts.zoho.com/signin/v2/lookup/10102608122/2727643000350339143/10002227248', 
             { identifier: identifier },
             { headers: { 'servicename': 'ZohoCreator', 'is_Ajax': 'true' } }
         );
+
+        if (lookupRes.status !== 200) {
+             console.error("[AZURE PROXY] Lookup failed. Status:", lookupRes.status);
+             return res.status(400).json({ success: false, error: "Invalid Register Number. Zoho rejected the identifier." });
+        }
 
         const digest = lookupRes.data?.digest || '';
         const cookies = await jar.getCookies('https://accounts.zoho.com');
@@ -54,9 +57,8 @@ app.post('/api/handshake', async (req, res) => {
         const timestamp = Date.now();
         const serviceUrl = encodeURIComponent('https://creatorapp.zoho.com/srm_university/academia-academic-services/#');
 
-        // Step 3: Password Strike
         console.log("[AZURE PROXY] Step 3: Password Strike...");
-        await client.post(
+        const passRes = await client.post(
             `https://accounts.zoho.com/signin/v2/primary/${encodeURIComponent(identifier)}/password?digest=${digest}&cli_time=${timestamp}&orgtype=40&service_language=en&serviceurl=${serviceUrl}`,
             { passwordauth: { password: password } },
             { 
@@ -69,7 +71,11 @@ app.post('/api/handshake', async (req, res) => {
             }
         );
 
-        // Step 4: Dumb Router JSON Extraction
+        if (passRes.status !== 200) {
+             console.error("[AZURE PROXY] Password Strike failed. Status:", passRes.status);
+             return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
+        }
+
         console.log("[AZURE PROXY] Step 4: Extracting Profile JSON...");
         const profileRes = await client.get('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
         
@@ -86,7 +92,6 @@ app.post('/api/handshake', async (req, res) => {
             console.log("[AZURE PROXY] SUCCESS! Extracted Name:", realName);
         }
 
-        // Return extracted data safely back to Vercel
         return res.status(200).json({
             success: true,
             realName: realName,
@@ -94,8 +99,8 @@ app.post('/api/handshake', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("[AZURE PROXY] Handshake failed:", error.message);
-        return res.status(500).json({ error: "Azure Proxy WAF Block or Timeout", details: error.message });
+        console.error("[AZURE PROXY] Hard crash:", error.message);
+        return res.status(500).json({ success: false, error: "Azure Network Failure", details: error.message });
     }
 });
 
