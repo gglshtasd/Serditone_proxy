@@ -104,7 +104,8 @@ app.post('/api/handshake', async (req, res) => {
         let profileRaw = "";
 
         try {
-            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            // FIXED: Removed the invalid urlParams parameter to stop Zoho Error 1060
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report', { waitUntil: 'domcontentloaded', timeout: 30000 });
             profileRaw = await page.evaluate(extractJsonFromDom);
             console.log(`[HANDSHAKE] Profile Raw Data (First 150 chars): ${profileRaw ? profileRaw.substring(0, 150) : "EMPTY"}`);
 
@@ -216,7 +217,8 @@ app.post('/api/scrape', async (req, res) => {
         // 1. TIMETABLE
         try {
             console.log("[SYNC] Navigating to Unified_Time_Table API...");
-            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table?urlParams=%7B%7D', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            // FIXED: Removed the invalid urlParams parameter
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table', { waitUntil: 'domcontentloaded', timeout: 30000 });
             rawExtraction.timetableRaw = await page.evaluate(extractJsonFromDom);
         } catch (e) {
             rawExtraction.errors.push("TT Nav Error: " + e.message);
@@ -225,7 +227,8 @@ app.post('/api/scrape', async (req, res) => {
         // 2. ATTENDANCE
         try {
             console.log("[SYNC] Navigating to Academic_Status API...");
-            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status?urlParams=%7B%7D', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            // FIXED: Removed the invalid urlParams parameter
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status', { waitUntil: 'domcontentloaded', timeout: 30000 });
             rawExtraction.attendanceRaw = await page.evaluate(extractJsonFromDom);
         } catch (e) {
             rawExtraction.errors.push("Att Nav Error: " + e.message);
