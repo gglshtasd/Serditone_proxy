@@ -61,16 +61,19 @@ app.post('/api/handshake', async (req, res) => {
         // Aggressively block heavy resources
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font', 'media', 'websocket'].includes(req.resourceType())) {
+            // RELAXED BLOCKING: We must allow stylesheets and scripts. If we block them, Zoho's WAF assumes we are a headless bot.
+            if (['image', 'media'].includes(req.resourceType())) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
 
-        console.log("[PUPPETEER] Executing Direct Strike on Zoho IAM...");
-        // BYPASSING SRM LANDING PAGE: Going straight to the Blueprint Tenant URL
-        await page.goto('https://accounts.zoho.com/signin/v2/primary/10102608122/2727643000350339143/10002227248', { 
+        console.log("[PUPPETEER] Executing Public Route Bypass...");
+        // THE GOLDILOCKS URL: 
+        // Not the SRM landing page (freezes), and not the deep-link API (triggers the Roadblock).
+        // This is the official public entry door that generates a fresh, trusted WAF session.
+        await page.goto('https://accounts.zoho.com/signin?servicename=ZohoCreator&serviceurl=https://creatorapp.zoho.com/srm_university/academia-academic-services/', { 
             waitUntil: 'networkidle2', 
             timeout: 60000 
         });
