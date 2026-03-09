@@ -68,21 +68,23 @@ app.post('/api/handshake', async (req, res) => {
             }
         });
 
-        console.log("[PUPPETEER] Navigating to Academia...");
-        // Increase navigation timeout to 60 seconds for the slow 1GB VM
-        await page.goto('https://academia.srmist.edu.in/', { waitUntil: 'networkidle2', timeout: 60000 });
+        console.log("[PUPPETEER] Executing Direct Strike on Zoho IAM...");
+        // BYPASSING SRM LANDING PAGE: Going straight to the Blueprint Tenant URL
+        await page.goto('https://accounts.zoho.com/signin/v2/primary/10102608122/2727643000350339143/10002227248', { 
+            waitUntil: 'networkidle2', 
+            timeout: 60000 
+        });
 
-        console.log("[PUPPETEER] Waiting for Zoho IAM Redirect...");
+        console.log("[PUPPETEER] Waiting for Login Box...");
         
         // MICRO-CATCH: The X-Ray Trap for the Username Box
         try {
-            // Give it 45 seconds to redirect and render the box
             await page.waitForSelector('input[id="login_id"]', { timeout: 45000 });
         } catch (selectorErr) {
             console.error("[PUPPETEER] ❌ FAILED TO FIND USERNAME BOX.");
             const htmlDump = await page.content();
             console.error("============= X-RAY HTML DUMP =============");
-            console.error(htmlDump.substring(0, 1500)); // Print first 1500 chars to terminal
+            console.error(htmlDump.substring(0, 1500)); 
             console.error("===========================================");
             throw new Error("Zoho WAF Blocked the login page or OS killed process.");
         }
