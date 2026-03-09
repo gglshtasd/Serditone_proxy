@@ -230,8 +230,3 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`[VM GATEWAY] Serditone Deep Scraper running on port ${PORT}`));
 ```
 
-### Step 3: Restart & Monitor
-```bash
-pm2 flush
-pm2 restart serditone-api
-pm2 logs serditone-api
