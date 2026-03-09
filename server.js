@@ -22,14 +22,18 @@ app.post('/api/handshake', async (req, res) => {
     let browser;
 
     try {
-        // Launch Headless Chrome optimized for Azure App Services
+        // Launch Headless Chrome heavily optimized for Azure F1 Free Tier (Low RAM Mode)
         browser = await puppeteer.launch({
             headless: "new",
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
+                '--disable-dev-shm-usage', // Critical for Azure Linux containers
                 '--disable-gpu',
+                '--single-process',        // Forces Chrome to use 1 process (Saves massive RAM)
+                '--no-zygote',             // Disables zygote fork (Saves RAM)
+                '--no-first-run',
+                '--disable-extensions',
                 '--window-size=1280,800'
             ]
         });
@@ -39,6 +43,16 @@ app.post('/api/handshake', async (req, res) => {
         // Anti-Bot Mimicry
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+
+        // Block images and CSS to save network bandwidth and RAM during the scrape
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
 
         console.log("[PUPPETEER] Navigating to Academia...");
         await page.goto('https://academia.srmist.edu.in/', { waitUntil: 'networkidle2', timeout: 30000 });
@@ -120,7 +134,9 @@ app.post('/api/handshake', async (req, res) => {
             }
         }
 
+        // Close browser immediately to free up Azure F1 RAM
         await browser.close();
+        
         return res.status(200).json({
             success: true,
             realName: realName,
@@ -129,6 +145,7 @@ app.post('/api/handshake', async (req, res) => {
 
     } catch (error) {
         console.error("[PUPPETEER] Hard crash:", error.message);
+        // Absolute fail-safe to prevent Zombie processes from eating all Azure RAM
         if (browser) await browser.close();
         return res.status(500).json({ success: false, error: "Azure Browser Engine Failure", details: error.message });
     }
