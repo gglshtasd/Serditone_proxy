@@ -9,15 +9,8 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.status(200).json({ status: "Active", service: "Serditone Stabilized Gateway" });
+    res.status(200).json({ status: "Active", service: "Serditone Ghost Fetch Gateway" });
 });
-
-// Helper function to extract JSON from Chrome's DOM viewer
-const extractJsonFromDom = () => {
-    const pre = document.querySelector('pre');
-    if (pre) return pre.innerText;
-    return document.body.innerText || document.body.textContent;
-};
 
 // ==========================================
 // 1. THE HANDSHAKE (Lightweight Auth Check)
@@ -99,18 +92,41 @@ app.post('/api/handshake', async (req, res) => {
             }
         }
 
-        console.log("[HANDSHAKE] WAF Bypassed. Navigating directly to Profile API to bypass CORS...");
+        console.log("[HANDSHAKE] WAF Bypassed. Loading Visual Dashboard to establish secure CORS context...");
+        
+        // 1. Navigate to the visual dashboard to set origin and cookies properly
+        await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/', { waitUntil: 'networkidle2', timeout: 45000 });
+        
+        // 2. Extract the hidden security cookie from Puppeteer
+        const cookies = await page.cookies();
+        const iamcsr = cookies.find(c => c.name === 'iamcsr')?.value || '';
+        console.log(`[HANDSHAKE] Extracted CSRF Security Token: ${iamcsr ? "FOUND" : "MISSING"}`);
+
+        // 3. Execute the "Ghost Fetch" from inside the browser with forged headers
         let realName = "Classified Operative";
-        let profileRaw = "";
+        let profileRaw = await page.evaluate(async (csrf) => {
+            try { 
+                const res = await window.fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-ZCSRF-TOKEN': csrf, // Bypasses the 1030 Error
+                        'servicename': 'ZohoCreator',
+                        'is_Ajax': 'true'
+                    }
+                });
+                return { success: true, status: res.status, body: await res.text() };
+            } catch (err) { 
+                return { success: false, error: err.toString() }; 
+            }
+        }, iamcsr);
 
-        try {
-            // FIXED: Removed the invalid urlParams parameter to stop Zoho Error 1060
-            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report', { waitUntil: 'domcontentloaded', timeout: 30000 });
-            profileRaw = await page.evaluate(extractJsonFromDom);
-            console.log(`[HANDSHAKE] Profile Raw Data (First 150 chars): ${profileRaw ? profileRaw.substring(0, 150) : "EMPTY"}`);
+        console.log(`[HANDSHAKE] Profile API Status: ${profileRaw.status}`);
+        console.log(`[HANDSHAKE] Profile API Response (First 150 chars): ${profileRaw.body ? profileRaw.body.substring(0, 150).replace(/\n/g, '') : profileRaw.error}`);
 
-            if (profileRaw) {
-                const profileData = JSON.parse(profileRaw);
+        if (profileRaw.success && profileRaw.body) {
+            try {
+                const profileData = JSON.parse(profileRaw.body);
                 const stringified = JSON.stringify(profileData);
                 const nameMatch = stringified.match(/"Name":"([^"]+)"/i) || stringified.match(/"Student_Name":"([^"]+)"/i);
                 
@@ -120,9 +136,9 @@ app.post('/api/handshake', async (req, res) => {
                 } else {
                     console.log("[HANDSHAKE] WARNING: 'Name' key not found in parsed JSON.");
                 }
+            } catch (e) {
+                console.log(`[HANDSHAKE] WARNING: Failed to parse Profile JSON.`);
             }
-        } catch (e) {
-            console.log(`[HANDSHAKE] WARNING: Failed to extract or parse Profile JSON: ${e.message}`);
         }
         
         console.log(`[HANDSHAKE] Success! Extracted Name: ${realName}`);
@@ -210,29 +226,40 @@ app.post('/api/scrape', async (req, res) => {
             } catch (e) {}
         }
 
-        console.log("[SYNC] WAF Bypassed. Initiating Direct Navigation to APIs...");
+        console.log("[SYNC] WAF Bypassed. Loading Visual Dashboard to establish secure CORS context...");
         
-        let rawExtraction = { timetableRaw: null, attendanceRaw: null, errors: [] };
+        // 1. Navigate to visual dashboard
+        await page.goto('https://creatorapp.zoho.com/srm_university/academia-academic-services/', { waitUntil: 'networkidle2', timeout: 45000 });
+        
+        // 2. Extract security cookie
+        const cookies = await page.cookies();
+        const iamcsr = cookies.find(c => c.name === 'iamcsr')?.value || '';
+        console.log(`[SYNC] Extracted CSRF Security Token: ${iamcsr ? "FOUND" : "MISSING"}`);
 
-        // 1. TIMETABLE
-        try {
-            console.log("[SYNC] Navigating to Unified_Time_Table API...");
-            // FIXED: Removed the invalid urlParams parameter
-            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table', { waitUntil: 'domcontentloaded', timeout: 30000 });
-            rawExtraction.timetableRaw = await page.evaluate(extractJsonFromDom);
-        } catch (e) {
-            rawExtraction.errors.push("TT Nav Error: " + e.message);
-        }
-
-        // 2. ATTENDANCE
-        try {
-            console.log("[SYNC] Navigating to Academic_Status API...");
-            // FIXED: Removed the invalid urlParams parameter
-            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status', { waitUntil: 'domcontentloaded', timeout: 30000 });
-            rawExtraction.attendanceRaw = await page.evaluate(extractJsonFromDom);
-        } catch (e) {
-            rawExtraction.errors.push("Att Nav Error: " + e.message);
-        }
+        console.log("[SYNC] Initiating Ghost Fetches for Timetable and Attendance...");
+        
+        // 3. Execute Ghost Fetches
+        const rawExtraction = await page.evaluate(async (csrf) => {
+            const data = { timetableRaw: null, attendanceRaw: null, errors: [] };
+            const headers = { 
+                'Accept': 'application/json', 
+                'X-ZCSRF-TOKEN': csrf, 
+                'servicename': 'ZohoCreator', 
+                'is_Ajax': 'true' 
+            };
+            
+            try {
+                const ttRes = await window.fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table', { headers });
+                data.timetableRaw = await ttRes.text();
+            } catch (e) { data.errors.push("TT Fetch Error: " + e.toString()); }
+            
+            try {
+                const attRes = await window.fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status', { headers });
+                data.attendanceRaw = await attRes.text();
+            } catch (e) { data.errors.push("Att Fetch Error: " + e.toString()); }
+            
+            return data;
+        }, iamcsr);
 
         console.log(`\n[SYNC] --- EXTRACTION DIAGNOSTICS ---`);
         console.log(`[SYNC] Timetable Payload Length: ${rawExtraction.timetableRaw ? rawExtraction.timetableRaw.length : 0} bytes`);
