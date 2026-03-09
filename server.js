@@ -1,16 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
-const { wrapper } = require('axios-cookiejar-support');
-const { CookieJar } = require('tough-cookie');
+const puppeteer = require('puppeteer');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Azure Health Check Route
+// Azure Health Check
 app.get('/', (req, res) => {
-    res.status(200).json({ status: "Active", service: "Serditone Azure BFF Gateway" });
+    res.status(200).json({ status: "Active", service: "Serditone Azure Puppeteer Gateway" });
 });
 
 app.post('/api/handshake', async (req, res) => {
@@ -20,124 +18,109 @@ app.post('/api/handshake', async (req, res) => {
         return res.status(400).json({ success: false, error: "Missing payload requirements." });
     }
 
-    console.log(`[AZURE PROXY] Initiating Handshake for: ${identifier}`);
-
-    const jar = new CookieJar();
-    const client = wrapper(axios.create({
-        jar,
-        withCredentials: true,
-        timeout: 25000, 
-        validateStatus: () => true, // Catch everything, do not crash on 401s
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive'
-        }
-    }));
+    console.log(`[PUPPETEER] Booting Headless Engine for: ${identifier}`);
+    let browser;
 
     try {
-        console.log("[AZURE PROXY] Step 1: Tenant Discovery...");
-        await client.get('https://accounts.zoho.com/signin/v2/primary/10102608122/2727643000350339143/10002227248');
+        // Launch Headless Chrome optimized for Azure App Services
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--window-size=1280,800'
+            ]
+        });
 
-        console.log("[AZURE PROXY] Step 2: Token Harvest...");
-        const lookupRes = await client.post('https://accounts.zoho.com/signin/v2/lookup/10102608122/2727643000350339143/10002227248', 
-            { identifier: identifier },
-            { headers: { 'servicename': 'ZohoCreator', 'is_Ajax': 'true' } }
-        );
+        const page = await browser.newPage();
+        
+        // Anti-Bot Mimicry
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
-        if (lookupRes.status !== 200) {
-             console.error("[AZURE PROXY] Lookup failed. Status:", lookupRes.status);
-             return res.status(400).json({ success: false, error: "Invalid Register Number. Zoho rejected the identifier." });
-        }
+        console.log("[PUPPETEER] Navigating to Academia...");
+        await page.goto('https://academia.srmist.edu.in/', { waitUntil: 'networkidle2', timeout: 30000 });
 
-        const digest = lookupRes.data?.digest || '';
-        const cookies = await jar.getCookies('https://accounts.zoho.com');
-        const iamcsr = cookies.find(c => c.key === 'iamcsr')?.value || '';
-        let timestamp = Date.now();
-        const serviceUrl = encodeURIComponent('https://creatorapp.zoho.com/srm_university/academia-academic-services/#');
+        // Step 1: Enter Username
+        console.log("[PUPPETEER] Entering Identifier...");
+        await page.waitForSelector('input[id="login_id"]', { timeout: 10000 });
+        await page.type('input[id="login_id"]', identifier, { delay: 50 });
+        await page.click('button[id="nextbtn"]');
 
-        console.log("[AZURE PROXY] Step 3: Password Strike...");
-        let passRes = await client.post(
-            `https://accounts.zoho.com/signin/v2/primary/${encodeURIComponent(identifier)}/password?digest=${digest}&cli_time=${timestamp}&orgtype=40&service_language=en&serviceurl=${serviceUrl}`,
-            { passwordauth: { password: password } },
-            { 
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'servicename': 'ZohoCreator', 
-                    'is_Ajax': 'true',
-                    'X-ZCSRF-TOKEN': iamcsr
-                } 
-            }
-        );
+        // Step 2: Enter Password
+        console.log("[PUPPETEER] Entering Password...");
+        await page.waitForSelector('input[id="password"]', { timeout: 10000 });
+        await new Promise(resolve => setTimeout(resolve, 800)); // Human delay
+        await page.type('input[id="password"]', password, { delay: 50 });
+        
+        // Wait for navigation after clicking sign in
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {}),
+            page.click('button[id="nextbtn"]')
+        ]);
 
-        // Convert response to string to safely parse HTML or JSON errors
-        let passBody = typeof passRes.data === 'object' ? JSON.stringify(passRes.data) : passRes.data;
-        console.log(`[AZURE PROXY] Password Strike Response Status: ${passRes.status}`);
+        console.log("[PUPPETEER] Analyzing Post-Login DOM State...");
+        const pageContent = await page.content();
 
-        // ==========================================
-        // THE GHOST SESSION TERMINATOR
-        // ==========================================
-        if (passBody.includes('Terminate all other sessions') || passBody.includes('maximum active sessions') || passBody.includes('activesessions')) {
-            console.log("[AZURE PROXY] ⚠️ GHOST SESSION LIMIT DETECTED. Executing Termination Protocol...");
-            try {
-                // Execute the DELETE command exactly as specified in the blueprints
-                await client.delete('https://accounts.zoho.com/webclient/v1/account/self/user/self/activesessions', {
-                    headers: {
-                        'X-ZCSRF-TOKEN': iamcsr,
-                        'is_Ajax': 'true'
-                    }
-                });
-                
-                console.log("[AZURE PROXY] 💥 Sessions Terminated. Retrying Password Strike...");
-                
-                // Regenerate Anti-Replay timestamp and strike again
-                timestamp = Date.now();
-                passRes = await client.post(
-                    `https://accounts.zoho.com/signin/v2/primary/${encodeURIComponent(identifier)}/password?digest=${digest}&cli_time=${timestamp}&orgtype=40&service_language=en&serviceurl=${serviceUrl}`,
-                    { passwordauth: { password: password } },
-                    { 
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'servicename': 'ZohoCreator', 
-                            'is_Ajax': 'true',
-                            'X-ZCSRF-TOKEN': iamcsr
-                        } 
-                    }
-                );
-                passBody = typeof passRes.data === 'object' ? JSON.stringify(passRes.data) : passRes.data;
-            } catch (termErr) {
-                console.error("[AZURE PROXY] Session Termination Failed:", termErr.message);
-            }
-        }
-
-        // ==========================================
-        // SMART ERROR HANDLING
-        // ==========================================
-        if (passBody.includes('INVALID_PASSWORD') || passBody.includes('Invalid Password') || passRes.status === 401) {
-            console.log("[AZURE PROXY] Zoho explicitly rejected the password.");
+        // -----------------------------------------------------
+        // ERROR HANDLING & GHOST SESSION TERMINATOR
+        // -----------------------------------------------------
+        if (pageContent.includes('Invalid Password') || pageContent.includes('INVALID_PASSWORD')) {
+            console.log("[PUPPETEER] Rejected: Incorrect Password.");
+            await browser.close();
             return res.status(401).json({ success: false, error: "Incorrect Academia Password." });
         }
 
-        console.log("[AZURE PROXY] Step 4: Extracting Profile JSON...");
-        const profileRes = await client.get('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
+        if (pageContent.includes('Terminate all other sessions') || pageContent.includes('maximum active sessions')) {
+            console.log("[PUPPETEER] Ghost Session Limit Detected! Clicking Terminate button...");
+            // Click the Zoho UI button to kill other sessions
+            try {
+                await Promise.all([
+                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
+                    page.evaluate(() => {
+                        const btns = Array.from(document.querySelectorAll('.blue_btn, button'));
+                        const termBtn = btns.find(b => b.textContent.includes('Terminate') || b.textContent.includes('Continue'));
+                        if (termBtn) termBtn.click();
+                    })
+                ]);
+            } catch (e) {
+                console.log("[PUPPETEER] Warning: Failed to click Terminate button natively.");
+            }
+        }
+
+        // -----------------------------------------------------
+        // DATA EXTRACTION (The Profile API)
+        // -----------------------------------------------------
+        console.log("[PUPPETEER] Requesting Profile Database JSON...");
         
-        const stringified = JSON.stringify(profileRes.data);
-        const nameMatch = stringified.match(/"Name":"([^"]+)"/i) || stringified.match(/"Student_Name":"([^"]+)"/i);
-        
+        // We execute a fetch request from INSIDE the authenticated browser console
+        const profileData = await page.evaluate(async () => {
+            try {
+                const response = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
+                return await response.json();
+            } catch (err) {
+                return null;
+            }
+        });
+
         let realName = "Classified Operative";
         let isWrapperVerified = false;
 
-        if (nameMatch && nameMatch[1]) {
-            const nameParts = nameMatch[1].trim().split(/\s+/);
-            realName = nameParts.length > 2 ? `${nameParts[0]} ${nameParts[1]}` : nameMatch[1].trim();
-            isWrapperVerified = true;
-            console.log("[AZURE PROXY] SUCCESS! Extracted Name:", realName);
-        } else {
-            console.log("[AZURE PROXY] WARNING: Could not find student name in Profile JSON.");
-            console.log("[AZURE PROXY] Profile Response Snippet:", stringified.substring(0, 150));
+        if (profileData) {
+            const stringified = JSON.stringify(profileData);
+            const nameMatch = stringified.match(/"Name":"([^"]+)"/i) || stringified.match(/"Student_Name":"([^"]+)"/i);
+            
+            if (nameMatch && nameMatch[1]) {
+                const nameParts = nameMatch[1].trim().split(/\s+/);
+                realName = nameParts.length > 2 ? `${nameParts[0]} ${nameParts[1]}` : nameMatch[1].trim();
+                isWrapperVerified = true;
+                console.log("[PUPPETEER] SUCCESS! Extracted Name:", realName);
+            }
         }
 
+        await browser.close();
         return res.status(200).json({
             success: true,
             realName: realName,
@@ -145,12 +128,13 @@ app.post('/api/handshake', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("[AZURE PROXY] Hard crash:", error.message);
-        return res.status(500).json({ success: false, error: "Azure Network Failure", details: error.message });
+        console.error("[PUPPETEER] Hard crash:", error.message);
+        if (browser) await browser.close();
+        return res.status(500).json({ success: false, error: "Azure Browser Engine Failure", details: error.message });
     }
 });
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-    console.log(`[AZURE] Serditone Gateway running on port ${PORT}`);
+    console.log(`[AZURE] Serditone Puppeteer Gateway running on port ${PORT}`);
 });
