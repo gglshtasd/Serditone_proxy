@@ -12,6 +12,13 @@ app.get('/', (req, res) => {
     res.status(200).json({ status: "Active", service: "Serditone Stabilized Gateway" });
 });
 
+// Helper function to extract JSON from Chrome's DOM viewer
+const extractJsonFromDom = () => {
+    const pre = document.querySelector('pre');
+    if (pre) return pre.innerText;
+    return document.body.innerText || document.body.textContent;
+};
+
 // ==========================================
 // 1. THE HANDSHAKE (Lightweight Auth Check)
 // ==========================================
@@ -32,7 +39,7 @@ app.post('/api/handshake', async (req, res) => {
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage', // CRITICAL: Prevents Docker/VM shared memory crashes
+                '--disable-dev-shm-usage',
                 '--disable-gpu', 
                 '--no-first-run', 
                 '--disable-site-isolation-trials', 
@@ -92,39 +99,29 @@ app.post('/api/handshake', async (req, res) => {
             }
         }
 
-        console.log("[HANDSHAKE] WAF Bypassed. Stabilizing dashboard...");
-        await new Promise(r => setTimeout(r, 4000));
-
-        console.log("[HANDSHAKE] Extracting Real Name...");
+        console.log("[HANDSHAKE] WAF Bypassed. Navigating directly to Profile API to bypass CORS...");
         let realName = "Classified Operative";
-        
-        let profileRaw = await page.evaluate(async () => {
-            try { 
-                const res = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D');
-                const text = await res.text();
-                return { success: true, status: res.status, body: text };
-            } catch (err) { 
-                return { success: false, error: err.toString() }; 
-            }
-        });
+        let profileRaw = "";
 
-        console.log(`[HANDSHAKE] Profile API Status: ${profileRaw.status}`);
-        console.log(`[HANDSHAKE] Profile API Response (First 300 chars): ${profileRaw.body ? profileRaw.body.substring(0, 300) : profileRaw.error}`);
+        try {
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Student_Profile_Report?urlParams=%7B%7D', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            profileRaw = await page.evaluate(extractJsonFromDom);
+            console.log(`[HANDSHAKE] Profile Raw Data (First 150 chars): ${profileRaw ? profileRaw.substring(0, 150) : "EMPTY"}`);
 
-        if (profileRaw.success && profileRaw.body) {
-            try {
-                const profileData = JSON.parse(profileRaw.body);
+            if (profileRaw) {
+                const profileData = JSON.parse(profileRaw);
                 const stringified = JSON.stringify(profileData);
                 const nameMatch = stringified.match(/"Name":"([^"]+)"/i) || stringified.match(/"Student_Name":"([^"]+)"/i);
+                
                 if (nameMatch && nameMatch[1]) {
                     const parts = nameMatch[1].trim().split(/\s+/);
                     realName = parts.length > 2 ? `${parts[0]} ${parts[1]}` : nameMatch[1].trim();
                 } else {
-                    console.log("[HANDSHAKE] WARNING: Could not find 'Name' key in JSON.");
+                    console.log("[HANDSHAKE] WARNING: 'Name' key not found in parsed JSON.");
                 }
-            } catch (e) {
-                console.log("[HANDSHAKE] WARNING: Failed to parse Profile JSON. Zoho might have returned an HTML error page instead of JSON.");
             }
+        } catch (e) {
+            console.log(`[HANDSHAKE] WARNING: Failed to extract or parse Profile JSON: ${e.message}`);
         }
         
         console.log(`[HANDSHAKE] Success! Extracted Name: ${realName}`);
@@ -212,37 +209,39 @@ app.post('/api/scrape', async (req, res) => {
             } catch (e) {}
         }
 
-        console.log("[SYNC] Internal Dashboard Reached. Stabilizing context...");
-        await new Promise(r => setTimeout(r, 5000));
-
-        console.log("[SYNC] Injecting Data Extraction Scripts...");
+        console.log("[SYNC] WAF Bypassed. Initiating Direct Navigation to APIs...");
         
-        const rawExtraction = await page.evaluate(async () => {
-            const data = { timetableRaw: null, attendanceRaw: null, errors: [] };
-            try {
-                const ttRes = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table?urlParams=%7B%7D');
-                data.timetableRaw = await ttRes.text();
-            } catch (e) { data.errors.push("TT Error: " + e.toString()); }
-            
-            try {
-                const attRes = await fetch('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status?urlParams=%7B%7D');
-                data.attendanceRaw = await attRes.text();
-            } catch (e) { data.errors.push("Att Error: " + e.toString()); }
-            
-            return data;
-        });
+        let rawExtraction = { timetableRaw: null, attendanceRaw: null, errors: [] };
 
-        console.log(`[SYNC] --- EXTRACTION DIAGNOSTICS ---`);
+        // 1. TIMETABLE
+        try {
+            console.log("[SYNC] Navigating to Unified_Time_Table API...");
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Unified_Time_Table?urlParams=%7B%7D', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            rawExtraction.timetableRaw = await page.evaluate(extractJsonFromDom);
+        } catch (e) {
+            rawExtraction.errors.push("TT Nav Error: " + e.message);
+        }
+
+        // 2. ATTENDANCE
+        try {
+            console.log("[SYNC] Navigating to Academic_Status API...");
+            await page.goto('https://creatorapp.zoho.com/api/v2/srm_university/academia-academic-services/report/Academic_Status?urlParams=%7B%7D', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            rawExtraction.attendanceRaw = await page.evaluate(extractJsonFromDom);
+        } catch (e) {
+            rawExtraction.errors.push("Att Nav Error: " + e.message);
+        }
+
+        console.log(`\n[SYNC] --- EXTRACTION DIAGNOSTICS ---`);
         console.log(`[SYNC] Timetable Payload Length: ${rawExtraction.timetableRaw ? rawExtraction.timetableRaw.length : 0} bytes`);
-        console.log(`[SYNC] Timetable Preview: ${rawExtraction.timetableRaw ? rawExtraction.timetableRaw.substring(0, 150) : "NULL"}`);
+        console.log(`[SYNC] Timetable Preview: ${rawExtraction.timetableRaw ? rawExtraction.timetableRaw.substring(0, 150).replace(/\n/g, '') : "NULL"}`);
         console.log(`[SYNC] Attendance Payload Length: ${rawExtraction.attendanceRaw ? rawExtraction.attendanceRaw.length : 0} bytes`);
-        console.log(`[SYNC] Attendance Preview: ${rawExtraction.attendanceRaw ? rawExtraction.attendanceRaw.substring(0, 150) : "NULL"}`);
-        if (rawExtraction.errors.length > 0) console.log(`[SYNC] Fetch Errors: ${JSON.stringify(rawExtraction.errors)}`);
-        console.log(`[SYNC] ------------------------------`);
+        console.log(`[SYNC] Attendance Preview: ${rawExtraction.attendanceRaw ? rawExtraction.attendanceRaw.substring(0, 150).replace(/\n/g, '') : "NULL"}`);
+        if (rawExtraction.errors.length > 0) console.log(`[SYNC] Navigation Errors: ${JSON.stringify(rawExtraction.errors)}`);
+        console.log(`[SYNC] ------------------------------\n`);
 
         let extractedData = { timetable: null, attendance: null };
-        try { extractedData.timetable = JSON.parse(rawExtraction.timetableRaw); } catch(e) { console.log("[SYNC] TT JSON Parse Failed. Zoho returned HTML/Text."); }
-        try { extractedData.attendance = JSON.parse(rawExtraction.attendanceRaw); } catch(e) { console.log("[SYNC] Att JSON Parse Failed. Zoho returned HTML/Text."); }
+        try { extractedData.timetable = JSON.parse(rawExtraction.timetableRaw); } catch(e) { console.log("[SYNC] TT JSON Parse Failed."); }
+        try { extractedData.attendance = JSON.parse(rawExtraction.attendanceRaw); } catch(e) { console.log("[SYNC] Att JSON Parse Failed."); }
 
         console.log("[SYNC] Extraction Complete. Returning payload to Vercel.");
         await browser.close().catch(()=>{});
