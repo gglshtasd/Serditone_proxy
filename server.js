@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.status(200).json({ status: "Active", service: "Serditone Human Clicker & DOM Ripper" });
+    res.status(200).json({ status: "Active", service: "Serditone Multi-Layer Scraper" });
 });
 
 // ==========================================
@@ -38,7 +38,7 @@ app.post('/api/handshake', async (req, res) => {
         });
         
         const page = await browser.newPage();
-        await page.setBypassCSP(true); // NEUTRALIZE ZOHO'S CONTENT SECURITY POLICY
+        await page.setBypassCSP(true);
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36');
         
         await page.setRequestInterception(true);
@@ -69,6 +69,7 @@ app.post('/api/handshake', async (req, res) => {
         }
 
         if (pageContent.includes('Terminate all other sessions')) {
+            console.log("[HANDSHAKE] Ghost Session trap detected. Terminating old sessions...");
             try {
                 await page.evaluate(() => {
                     const btns = Array.from(document.querySelectorAll('.blue_btn, button, input[type="button"]'));
@@ -79,29 +80,23 @@ app.post('/api/handshake', async (req, res) => {
             } catch (e) {}
         }
 
-        await new Promise(r => setTimeout(r, 8000));
-        let realName = "Classified Operative";
+        await new Promise(r => setTimeout(r, 6000));
 
-        const extractedVisualName = await page.evaluate((regNo) => {
-            let foundName = "";
-            const userEl = document.querySelector('.zcSidenavUserName, .user-name, [data-zcqa="user_name"]');
-            if (userEl && userEl.innerText) return userEl.innerText.trim();
-            
-            const elements = document.querySelectorAll('span, div, td, p, h1, h2, h3, h4');
-            for(let el of elements) {
-                if (el.innerText && el.innerText.toUpperCase().includes(regNo.toUpperCase())) {
-                    let cleanText = el.innerText.replace(new RegExp(regNo, 'gi'), '').replace(/[^a-zA-Z\s]/g, '').trim();
-                    cleanText = cleanText.replace(/Register Number|Student Name|Program|Branch|Welcome/gi, '').trim();
-                    if(cleanText.length > 3 && cleanText.length < 40) return cleanText;
+        // Fixed Identity Extractor
+        const extractedVisualName = await page.evaluate(() => {
+            const userEl = document.querySelector('.navbar_user_name, .zcSidenavUserName, .user-name');
+            if (userEl && userEl.innerText) {
+                let name = userEl.innerText.trim();
+                if (!name.includes('@srmist') && !name.includes('Change') && name.length > 2) {
+                    return name;
                 }
             }
-            return foundName;
-        }, identifier.split('@')[0]);
-
-        if (extractedVisualName) realName = extractedVisualName;
+            return "Classified Operative";
+        });
         
+        console.log(`[HANDSHAKE] Success. Operator parsed as: ${extractedVisualName}`);
         await browser.close().catch(()=>{});
-        return res.status(200).json({ success: true, realName: realName, isWrapperVerified: true });
+        return res.status(200).json({ success: true, realName: extractedVisualName, isWrapperVerified: true });
         
     } catch (error) {
         if (browser) await browser.close().catch(()=>{});
@@ -110,7 +105,7 @@ app.post('/api/handshake', async (req, res) => {
 });
 
 // ==========================================
-// 2. THE DATA EXTRACTOR (Hash Routing Fallback)
+// 2. THE MULTI-LAYER DATA EXTRACTOR
 // ==========================================
 app.post('/api/scrape', async (req, res) => {
     const { identifier, password } = req.body;
@@ -174,60 +169,107 @@ app.post('/api/scrape', async (req, res) => {
             } catch (e) {}
         }
 
+        console.log("[SYNC ENGINE] Login successful. Waiting for Dashboard Hydration...");
         await new Promise(r => setTimeout(r, 6000));
+        
         let extractedData = { timetableHtml: null, attendanceHtml: null, logs: [] };
 
         // -------------------------------------------------------------------
-        // TIMETABLE EXTRACTION
+        // EXTRACTION PROTOCOL: TIMETABLE
         // -------------------------------------------------------------------
-        const clickedTT = await page.evaluate(() => {
+        console.log("\n[SYNC - TIMETABLE] Initiating Layer 1: UI DOM Click...");
+        let ttStatus = await page.evaluate(() => {
             const elements = Array.from(document.querySelectorAll('a, span, div, li, p'));
             const target = elements.find(el => el.innerText && (el.innerText.includes('Time Table') || el.innerText.includes('Unified Time')));
-            if (target) { target.click(); return true; }
-            return false;
+            if (target) { target.click(); return "CLICKED"; }
+            return "NOT_FOUND";
         });
-
-        if (clickedTT) {
-            extractedData.logs.push("Timetable button clicked.");
-            await new Promise(r => setTimeout(r, 6000)); 
-            extractedData.timetableHtml = await page.evaluate(() => document.querySelector('table') ? document.querySelector('table').outerHTML : document.body.innerText.substring(0, 5000));
+        
+        if (ttStatus === "CLICKED") {
+            await new Promise(r => setTimeout(r, 5000)); // Wait for render
+            const html = await page.evaluate(() => document.querySelector('table.course_tbl') ? document.querySelector('table.course_tbl').outerHTML : null);
+            if (html) {
+                console.log(`[SYNC - TIMETABLE] Layer 1 SUCCESS. Extracted ${html.length} bytes.`);
+                extractedData.timetableHtml = html;
+                extractedData.logs.push("Timetable: Layer 1 (UI Click) Success.");
+            } else {
+                console.log("[SYNC - TIMETABLE] Layer 1 FAILED (Click worked, but table did not render). Moving to Layer 2.");
+                ttStatus = "FAILED_RENDER";
+            }
         } else {
-            console.log("[SYNC] ⚠️ UI Click Failed. LAST OPTION: Scrape HTML by forcing SPA Hash Routing...");
-            extractedData.logs.push("UI Click Failed. Triggering Hash Fallback (Timetable).");
-            await page.evaluate(() => {
-                const ttLink = Array.from(document.querySelectorAll('a')).find(a => a.href && a.href.includes('#Page:My_Time_Table'));
-                window.location.hash = ttLink ? (ttLink.getAttribute('href').split('#')[1] || ttLink.getAttribute('href')) : '#Page:My_Time_Table_2025_26_EVEN';
-            });
-            await new Promise(r => setTimeout(r, 6000));
-            extractedData.timetableHtml = await page.evaluate(() => document.querySelector('table.course_tbl') ? document.querySelector('table.course_tbl').outerHTML : document.body.innerHTML.substring(0, 5000));
+            console.log("[SYNC - TIMETABLE] Layer 1 FAILED (Button hidden). Moving to Layer 2.");
         }
 
+        if (!extractedData.timetableHtml) {
+            console.log("[SYNC - TIMETABLE] Initiating Layer 2: Strict SPA Hash Injection...");
+            await page.evaluate(() => { window.location.hash = '#Page:My_Time_Table_2025_26_EVEN'; });
+            await new Promise(r => setTimeout(r, 6000));
+            
+            const html = await page.evaluate(() => document.querySelector('table.course_tbl') ? document.querySelector('table.course_tbl').outerHTML : null);
+            if (html) {
+                console.log(`[SYNC - TIMETABLE] Layer 2 SUCCESS. Extracted ${html.length} bytes.`);
+                extractedData.timetableHtml = html;
+                extractedData.logs.push("Timetable: Layer 2 (Strict Hash) Success.");
+            } else {
+                console.log("[SYNC - TIMETABLE] Layer 2 FAILED. Moving to Layer 3 (Broad Rip).");
+                await page.evaluate(() => { window.location.hash = '#Page:My_Time_Table'; });
+                await new Promise(r => setTimeout(r, 6000));
+                
+                const broadHtml = await page.evaluate(() => {
+                    const tbl = Array.from(document.querySelectorAll('table')).find(t => t.innerText.includes('Course Code'));
+                    return tbl ? tbl.outerHTML : document.body.innerHTML.substring(0, 8000);
+                });
+                console.log(`[SYNC - TIMETABLE] Layer 3 EXECUTED. Ripped ${broadHtml.length} bytes.`);
+                extractedData.timetableHtml = broadHtml;
+                extractedData.logs.push("Timetable: Layer 3 (Broad Rip) Executed.");
+            }
+        }
+
+
         // -------------------------------------------------------------------
-        // ATTENDANCE EXTRACTION
+        // EXTRACTION PROTOCOL: ATTENDANCE
         // -------------------------------------------------------------------
-        const clickedAtt = await page.evaluate(() => {
+        console.log("\n[SYNC - ATTENDANCE] Initiating Layer 1: UI DOM Click...");
+        let attStatus = await page.evaluate(() => {
             const elements = Array.from(document.querySelectorAll('a, span, div, li, p'));
             const target = elements.find(el => el.innerText && (el.innerText.includes('Academic Status') || el.innerText.includes('Attendance')));
-            if (target) { target.click(); return true; }
-            return false;
+            if (target) { target.click(); return "CLICKED"; }
+            return "NOT_FOUND";
         });
 
-        if (clickedAtt) {
-            extractedData.logs.push("Attendance button clicked.");
-            await new Promise(r => setTimeout(r, 6000));
-            extractedData.attendanceHtml = await page.evaluate(() => document.querySelector('table') ? document.querySelector('table').outerHTML : document.body.innerText.substring(0, 5000));
+        if (attStatus === "CLICKED") {
+            await new Promise(r => setTimeout(r, 5000));
+            const html = await page.evaluate(() => document.querySelector('table[bgcolor="#FAFAD2"]') ? document.querySelector('table[bgcolor="#FAFAD2"]').outerHTML : null);
+            if (html) {
+                console.log(`[SYNC - ATTENDANCE] Layer 1 SUCCESS. Extracted ${html.length} bytes.`);
+                extractedData.attendanceHtml = html;
+                extractedData.logs.push("Attendance: Layer 1 (UI Click) Success.");
+            } else {
+                console.log("[SYNC - ATTENDANCE] Layer 1 FAILED (Click worked, table missing). Moving to Layer 2.");
+                attStatus = "FAILED_RENDER";
+            }
         } else {
-            console.log("[SYNC] ⚠️ UI Click Failed. LAST OPTION: Scrape HTML by forcing SPA Hash Routing...");
-            extractedData.logs.push("UI Click Failed. Triggering Hash Fallback (Attendance).");
-            await page.evaluate(() => { window.location.hash = '#Page:My_Attendance'; });
-            await new Promise(r => setTimeout(r, 6000));
-            extractedData.attendanceHtml = await page.evaluate(() => {
-                const table = document.querySelector('table[bgcolor="#FAFAD2"]') || document.querySelector('table');
-                return table ? table.outerHTML : document.body.innerHTML.substring(0, 5000);
-            });
+            console.log("[SYNC - ATTENDANCE] Layer 1 FAILED (Button hidden). Moving to Layer 2.");
         }
 
+        if (!extractedData.attendanceHtml) {
+            console.log("[SYNC - ATTENDANCE] Initiating Layer 2: SPA Hash Injection...");
+            await page.evaluate(() => { window.location.hash = '#Page:My_Attendance'; });
+            await new Promise(r => setTimeout(r, 6000));
+            
+            const html = await page.evaluate(() => {
+                const tbl = document.querySelector('table[bgcolor="#FAFAD2"]') || Array.from(document.querySelectorAll('table')).find(t => t.innerText.includes('Hours Conducted'));
+                return tbl ? tbl.outerHTML : document.body.innerHTML.substring(0, 8000);
+            });
+            
+            console.log(`[SYNC - ATTENDANCE] Layer 2/3 EXECUTED. Ripped ${html.length} bytes.`);
+            extractedData.attendanceHtml = html;
+            extractedData.logs.push("Attendance: Layer 2/3 (Hash/Broad Rip) Executed.");
+        }
+
+        console.log(`\n[SYNC ENGINE] Extraction Complete. Closing Headless Browser.`);
         await browser.close().catch(()=>{});
+        
         return res.status(200).json({ 
             success: true, 
             data: {
@@ -239,6 +281,7 @@ app.post('/api/scrape', async (req, res) => {
 
     } catch (error) {
         if (browser) await browser.close().catch(()=>{});
+        console.error("[SYNC ENGINE] FATAL CRASH:", error.message);
         return res.status(500).json({ success: false, error: "VM Browser Engine Failure", details: error.message });
     }
 });
